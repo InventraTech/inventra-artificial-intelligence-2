@@ -223,30 +223,3 @@ def executar_fluxo_assessor(pergunta_usuario: str, session_id: str) -> str:
     
     ultima_msg = estado_final["messages"][-1]
     return ultima_msg.content if hasattr(ultima_msg, 'content') else ultima_msg.get('content', '')
-
-if __name__ == "__main__":
-    session_id = "teste_usuario" 
-    print("=====================================================")
-    print("  IAI (Inventra AI) - Teste de Terminal v1")
-    print("  Digite 'sair' para encerrar a conversa.")
-    print("=====================================================\n")
-
-    while True:
-        try:
-            user_input = input("Você: ")
-            if user_input.lower() in ("sair", "end", "fim", "tchau", "bye"):
-                print("IAI: Encerrando a conversa. Até logo!")
-                break
-
-            resposta = executar_fluxo_assessor(
-                pergunta_usuario=user_input,
-                session_id=session_id,
-            )
-            print(f"IAI: {resposta}\n")
-
-        except KeyboardInterrupt:
-            print("\nSaindo...")
-            break
-        except Exception as e:  
-            print("Erro ao consumir a API:", e)
-            continue
