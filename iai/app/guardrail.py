@@ -1,21 +1,15 @@
 import re
-from pydantic import BaseModel, Field
 from langchain_core.prompts import ChatPromptTemplate
 from langchain_groq import ChatGroq
 from iai.app.config import GROQ_API_KEY
 from iai.app.prompts import GUARDRAIL_ENTRADA_SYSTEM_PROMPT
+from iai.app.schemas import ResultadoGuardrail
 
 llm_guardrail = ChatGroq(
     model="openai/gpt-oss-20b",
     temperature=0.0,
     api_key=GROQ_API_KEY
 )
-
-class ResultadoGuardrail(BaseModel):
-    bloqueado: bool = Field(description="True se a mensagem for proibida. False se permitida.")
-    motivo: str = Field(description="Motivo curto do bloqueio ou permissão.")
-    mensagem: str = Field(description="Mensagem educada se bloqueado. Vazio se permitido.")
-
 
 TERMOS_PROIBIDOS = [
     "idiota", "burro", "imbecil", "merda", "maldito", "lixo", 

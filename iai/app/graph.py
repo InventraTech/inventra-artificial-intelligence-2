@@ -1,6 +1,4 @@
-import operator
-from typing import Annotated
-from langgraph.graph import StateGraph, MessagesState, END
+from langgraph.graph import StateGraph, END
 from langchain_google_genai import ChatGoogleGenerativeAI
 from langchain_groq import ChatGroq
 from langchain.agents import create_agent
@@ -18,6 +16,7 @@ from iai.app.prompts import (
     FAQ_SYSTEM_PROMPT
 )
 from iai.app.guardrail import guardrail_entrada, guardrail_saida, anonimizar_entrada
+from iai.app.schemas import Estado
 
 llm_gemini = ChatGoogleGenerativeAI(
     model="gemini-2.5-flash",
@@ -92,11 +91,6 @@ faq_app = create_agent(
     tools=[faq_retriever_mock],
     system_prompt=FAQ_SYSTEM_PROMPT
 )
-
-class Estado(MessagesState):
-    agentes_chamados:   Annotated[list[str], operator.add]
-    rota:               str
-    mapa_pii:           dict
 
 def no_guardrail_entrada(estado: Estado) -> dict:
     mensagem_original = list(estado["messages"])[-1]
