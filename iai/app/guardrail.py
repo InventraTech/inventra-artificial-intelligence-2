@@ -1,17 +1,14 @@
-import os
 import re
-from dotenv import load_dotenv
 from pydantic import BaseModel, Field
 from langchain_core.prompts import ChatPromptTemplate
 from langchain_groq import ChatGroq
-from prompts import GUARDRAIL_ENTRADA_SYSTEM_PROMPT
-
-load_dotenv()
+from iai.app.config import GROQ_API_KEY
+from iai.app.prompts import GUARDRAIL_ENTRADA_SYSTEM_PROMPT
 
 llm_guardrail = ChatGroq(
     model="openai/gpt-oss-20b",
     temperature=0.0,
-    api_key=os.getenv("GROQ_API_KEY")
+    api_key=GROQ_API_KEY
 )
 
 class ResultadoGuardrail(BaseModel):

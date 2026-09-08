@@ -1,4 +1,4 @@
-from guardrail import anonimizar_entrada
+from iai.app.guardrail import anonimizar_entrada
 
 def test_anonimiza_email():
     texto = "meu email é joao@teste.com"

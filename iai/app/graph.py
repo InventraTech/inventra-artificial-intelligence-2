@@ -1,5 +1,3 @@
-from dotenv import load_dotenv
-import os
 import operator
 from typing import Annotated
 from langgraph.graph import StateGraph, MessagesState, END
@@ -10,8 +8,8 @@ from langgraph.checkpoint.memory import MemorySaver
 from langchain_core.messages import RemoveMessage
 from langchain_core.tools import tool
 from langchain_core.prompts import ChatPromptTemplate
-
-from prompts import (
+from iai.app.config import GROQ_API_KEY, GEMINI_API_KEY
+from iai.app.prompts import (
     ROTEADOR_SYSTEM_PROMPT,
     ORQUESTRADOR_SYSTEM_PROMPT,
     ESTOQUISTA_SYSTEM_PROMPT,
@@ -19,26 +17,23 @@ from prompts import (
     SUPERVISOR_SYSTEM_PROMPT,
     FAQ_SYSTEM_PROMPT
 )
-from guardrail import guardrail_entrada, guardrail_saida, anonimizar_entrada
-
-load_dotenv()
+from iai.app.guardrail import guardrail_entrada, guardrail_saida, anonimizar_entrada
 
 llm_gemini = ChatGoogleGenerativeAI(
     model="gemini-2.5-flash",
-    temperature=0.2, 
+    temperature=0.2,
     top_p=0.95,
-    google_api_key=os.getenv("GEMINI_API_KEY")
+    google_api_key=GEMINI_API_KEY
 )
 
 llm_groq = ChatGroq(
     model="openai/gpt-oss-20b",
     temperature=0.0,
     top_p=0.95,
-    api_key=os.getenv("GROQ_API_KEY")
+    api_key=GROQ_API_KEY
 )
 
 llm_especialista = llm_gemini.with_fallbacks([llm_groq])
-llm_rapido = llm_groq
 
 @tool
 def consultar_estoque_mock(item: str) -> str:
@@ -66,13 +61,13 @@ router_prompt = ChatPromptTemplate.from_messages([
     ("system", ROTEADOR_SYSTEM_PROMPT), 
     ("human", "{mensagens}")
 ])
-router_app = router_prompt | llm_rapido
+router_app = router_prompt | llm_groq
 
 orquestrador_prompt = ChatPromptTemplate.from_messages([
     ("system", ORQUESTRADOR_SYSTEM_PROMPT), 
     ("human", "{mensagens}")
 ])
-orquestrador_app = orquestrador_prompt | llm_rapido
+orquestrador_app = orquestrador_prompt | llm_groq
 
 estoquista_app = create_agent(
     model=llm_especialista,
@@ -93,7 +88,7 @@ supervisor_app = create_agent(
 )
 
 faq_app = create_agent(
-    model=llm_rapido,
+    model=llm_groq,
     tools=[faq_retriever_mock],
     system_prompt=FAQ_SYSTEM_PROMPT
 )
