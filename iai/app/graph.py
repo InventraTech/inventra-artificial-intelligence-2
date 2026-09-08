@@ -1,20 +1,22 @@
-from langgraph.graph import StateGraph, END
 from langchain.agents import create_agent
-from langgraph.checkpoint.memory import MemorySaver
 from langchain_core.messages import RemoveMessage
-from langchain_core.tools import tool
 from langchain_core.prompts import ChatPromptTemplate
-from iai.app.prompts import (
-    ROTEADOR_SYSTEM_PROMPT,
-    ORQUESTRADOR_SYSTEM_PROMPT,
-    ESTOQUISTA_SYSTEM_PROMPT,
-    COMPRADOR_SYSTEM_PROMPT,
-    SUPERVISOR_SYSTEM_PROMPT,
-    FAQ_SYSTEM_PROMPT
-)
-from iai.app.guardrail import guardrail_entrada, guardrail_saida, anonimizar_entrada
-from iai.app.schemas import Estado
+from langchain_core.tools import tool
+from langgraph.checkpoint.memory import MemorySaver
+from langgraph.graph import END, StateGraph
+
+from iai.app.guardrail import anonimizar_entrada, guardrail_entrada, guardrail_saida
 from iai.app.llms import llm_especialista, llm_rapido
+from iai.app.prompts import (
+    COMPRADOR_SYSTEM_PROMPT,
+    ESTOQUISTA_SYSTEM_PROMPT,
+    FAQ_SYSTEM_PROMPT,
+    ORQUESTRADOR_SYSTEM_PROMPT,
+    ROTEADOR_SYSTEM_PROMPT,
+    SUPERVISOR_SYSTEM_PROMPT,
+)
+from iai.app.schemas import Estado
+
 
 @tool
 def consultar_estoque_mock(item: str) -> str:
@@ -245,6 +247,6 @@ if __name__ == "__main__":
         except KeyboardInterrupt:
             print("\nSaindo...")
             break
-        except Exception as e:
+        except Exception as e:  
             print("Erro ao consumir a API:", e)
             continue

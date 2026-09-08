@@ -1,6 +1,7 @@
 from fastapi import APIRouter
-from iai.app.schemas import ChatResponse, ChatRequest
+
 from iai.app.graph import executar_fluxo_assessor
+from iai.app.schemas import ChatRequest, ChatResponse
 
 router = APIRouter(tags=["chat"])
 

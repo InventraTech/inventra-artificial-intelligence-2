@@ -1,4 +1,5 @@
 from fastapi import FastAPI
+
 from iai.app.routes import chat
 
 app = FastAPI(

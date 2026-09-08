@@ -1,8 +1,10 @@
 import re
+
 from langchain_core.prompts import ChatPromptTemplate
+
+from iai.app.llms import llm_guardrail
 from iai.app.prompts import GUARDRAIL_ENTRADA_SYSTEM_PROMPT
 from iai.app.schemas import ResultadoGuardrail
-from iai.app.llms import llm_guardrail
 
 TERMOS_PROIBIDOS = [
     "idiota", "burro", "imbecil", "merda", "maldito", "lixo", 
@@ -59,7 +61,7 @@ def guardrail_entrada(mensagem_usuario: str) -> dict:
     try:
         res = chain.invoke({"mensagem": mensagem_usuario})
         return {"bloqueado": res.bloqueado, "motivo": res.motivo, "mensagem": res.mensagem}
-    except Exception as e:
+    except Exception:  # noqa: BLE001 - fail-safe: qualquer erro na chamada ao LLM deve bloquear a mensagem
         return {"bloqueado": True, "motivo": "erro_api", "mensagem": "Erro interno de segurança. Tente novamente."}
 
 def guardrail_saida(texto_gerado: str, mapa_pii: dict, extra: dict) -> dict:
