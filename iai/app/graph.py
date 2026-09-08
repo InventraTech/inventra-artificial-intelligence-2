@@ -1,12 +1,9 @@
 from langgraph.graph import StateGraph, END
-from langchain_google_genai import ChatGoogleGenerativeAI
-from langchain_groq import ChatGroq
 from langchain.agents import create_agent
 from langgraph.checkpoint.memory import MemorySaver
 from langchain_core.messages import RemoveMessage
 from langchain_core.tools import tool
 from langchain_core.prompts import ChatPromptTemplate
-from iai.app.config import GROQ_API_KEY, GEMINI_API_KEY
 from iai.app.prompts import (
     ROTEADOR_SYSTEM_PROMPT,
     ORQUESTRADOR_SYSTEM_PROMPT,
@@ -17,22 +14,7 @@ from iai.app.prompts import (
 )
 from iai.app.guardrail import guardrail_entrada, guardrail_saida, anonimizar_entrada
 from iai.app.schemas import Estado
-
-llm_gemini = ChatGoogleGenerativeAI(
-    model="gemini-2.5-flash",
-    temperature=0.2,
-    top_p=0.95,
-    google_api_key=GEMINI_API_KEY
-)
-
-llm_groq = ChatGroq(
-    model="openai/gpt-oss-20b",
-    temperature=0.0,
-    top_p=0.95,
-    api_key=GROQ_API_KEY
-)
-
-llm_especialista = llm_gemini.with_fallbacks([llm_groq])
+from iai.app.llms import llm_especialista, llm_rapido
 
 @tool
 def consultar_estoque_mock(item: str) -> str:
@@ -60,13 +42,13 @@ router_prompt = ChatPromptTemplate.from_messages([
     ("system", ROTEADOR_SYSTEM_PROMPT), 
     ("human", "{mensagens}")
 ])
-router_app = router_prompt | llm_groq
+router_app = router_prompt | llm_rapido
 
 orquestrador_prompt = ChatPromptTemplate.from_messages([
     ("system", ORQUESTRADOR_SYSTEM_PROMPT), 
     ("human", "{mensagens}")
 ])
-orquestrador_app = orquestrador_prompt | llm_groq
+orquestrador_app = orquestrador_prompt | llm_rapido
 
 estoquista_app = create_agent(
     model=llm_especialista,
@@ -87,7 +69,7 @@ supervisor_app = create_agent(
 )
 
 faq_app = create_agent(
-    model=llm_groq,
+    model=llm_rapido,
     tools=[faq_retriever_mock],
     system_prompt=FAQ_SYSTEM_PROMPT
 )
