@@ -1,84 +1,95 @@
-# Inventra AI
+# Inteligência Artificial do Inventra
 
-IA multiagente para o app **Inventra**, seguindo a arquitetura combinada:
+IA multiagente para o app **Inventra**, exposta como serviço HTTP (FastAPI), seguindo a arquitetura:
 
 ```
 User
-  -> Guardrail entrada (palavrões / acesso ao código / dados sensíveis)
+  -> Guardrail entrada (palavrões / prompt injection / anonimiza PII)
        -> [bloqueado] Parar resposta
-       -> [ok] ─┬─> FAQ ──────────────────────────────┐
-                └─> Roteador -> Agente do cargo:       │
-                                  Estoquista            │
-                                  Comprador             ├─> Orquestrador -> Guardrail Saída -> User
-                                  Supervisor             │
+       -> [ok] -> Roteador -> Agente do cargo:
+                                Estoquista
+                                Comprador
+                                Supervisor
+                                FAQ           -> Orquestrador -> Guardrail Saída -> User
 ```
 
 ## Estrutura de pastas
 
 ```
-inventra_ai/
-├── main.py                     # ponto de entrada: monta o pipeline completo
+inventra-ai-2/
+├── iai/
+│   ├── .env                    # variáveis de ambiente locais (não versionado)
+│   └── app/
+│       ├── main.py             # app FastAPI: monta rotas e expõe GET /health
+│       ├── config.py           # lê o .env, expõe GEMINI_API_KEY/GROQ_API_KEY (SecretStr)
+│       ├── llms.py             # instancia os modelos (Gemini via llm_especialista, Groq via llm_rapido)
+│       ├── schemas.py          # Estado do grafo (Estado), ChatRequest/ChatResponse, ResultadoGuardrail
+│       ├── guardrail.py        # guardrail_entrada, guardrail_saida, anonimizar_entrada (PII)
+│       ├── prompts.py          # system prompts de cada agente/etapa
+│       ├── graph.py            # monta o grafo (LangGraph) e expõe executar_fluxo_assessor
+│       └── routes/
+│           └── chat.py         # POST /chat, chama executar_fluxo_assessor
+├── tests/
+│   └── test_guardrail.py
+├── conftest.py                 # env vars dummy para rodar os testes sem credenciais reais
+├── pytest.ini                  # pythonpath=. (necessário pois não há __init__.py em iai/)
 ├── requirements.txt
-├── .env.example
-├── db/
-│   ├── schema.sql              # tabelas: items, stock_movements, requisitions, suppliers...
-│   └── connection.py           # get_conn() (psycopg2), mesmo padrão de pg_tools_pt2.txt
-├── guardrails/
-│   ├── input_guardrail.py      # bloqueia palavrões, tentativa de acesso ao código, dados sensíveis
-│   └── output_guardrail.py     # segunda camada: sanitiza a resposta final
-├── knowledge/
-│   └── faq_inventra.md         # funcionalidades + tabela de contatos usada pelo agente FAQ
-├── tools/
-│   ├── estoque_tools.py        # tools do Estoquista (consultar_estoque, registrar_movimentacao...)
-│   ├── compras_tools.py        # tools do Comprador (criar_requisicao, listar_fornecedores...)
-│   ├── supervisor_tools.py     # tools do Supervisor (aprovar_requisicao, relatorio_geral_estoque)
-│   └── agent_runner.py         # loop compartilhado de tool-calling usado pelos 3 agentes
-├── agents/
-│   ├── faq_agent.py            # agente sem tools, responde com base em knowledge/faq_inventra.md
-│   ├── router_agent.py         # decide FAQ x operacional, e escolhe o agente pelo cargo
-│   ├── estoquista_agent.py     # agente especializado do Estoquista
-│   ├── comprador_agent.py      # agente especializado do Comprador
-│   └── supervisor_agent.py     # agente especializado do Supervisor
-└── orchestrator/
-    └── orchestrator.py         # padroniza a resposta final antes do guardrail de saída
+├── requirements-dev.txt        # ruff, mypy, pytest, pytest-cov, pip-audit
+├── mypy.ini
+└── Dockerfile
 ```
 
-Cada cargo tem seu **próprio agente** (persona, escopo, tarefas, regras e few-shots
-isolados), exatamente para que o system prompt de cada um não precise crescer com
-assuntos de outros cargos — só o Roteador sabe qual agente chamar.
+Cada cargo é atendido por um agente próprio (persona e tools isoladas), montado com
+`create_agent` (LangChain); o Roteador decide qual agente chamar a partir da última
+mensagem do usuário, e o Orquestrador formata a resposta final antes do guardrail de saída.
 
 ## Como rodar
 
-1. Crie o banco com `db/schema.sql` em um Postgres.
-2. Copie `.env.example` para `.env` e preencha `GOOGLE_API_KEY` e `DATABASE_URL`.
-3. Instale as dependências:
+1. Crie o arquivo `iai/.env` com as chaves necessárias:
+   ```
+   GEMINI_API_KEY=...
+   GROQ_API_KEY=...
+   ```
+   (repare que o `.env` fica dentro de `iai/`, não na raiz do projeto — é onde `config.py` procura.)
+2. Instale as dependências:
    ```
    pip install -r requirements.txt
    ```
-4. Rode o CLI de teste:
+3. Suba o servidor:
    ```
-   python main.py
+   python -m uvicorn iai.app.main:app --reload
    ```
-   Ele vai pedir o cargo (`estoquista`, `comprador` ou `supervisor`) e depois abrir um
-   loop de conversa chamando `InventraAI().responder(mensagem, cargo)`.
+4. Com o servidor no ar:
+   - `GET http://127.0.0.1:8000/health` → `{"status": "ok"}`
+   - `POST http://127.0.0.1:8000/chat` com corpo `{"session_id": "teste", "pergunta": "quantos tomates temos em estoque?"}` → resposta do fluxo de agentes
 
-## Uso programático
+## Docker
 
-```python
-from main import InventraAI
-
-app = InventraAI()
-resposta = app.responder("Quanto de arroz temos no estoque?", cargo_usuario="estoquista")
-print(resposta)
+```bash
+docker build -t inventra-ai .
+docker run -p 8000:8000 --env-file iai/.env inventra-ai
 ```
+
+## Testes
+
+```bash
+pip install -r requirements-dev.txt
+pytest --cov=. --cov-report=term-missing --cov-fail-under=70
+```
+
+Os testes não precisam de `GEMINI_API_KEY`/`GROQ_API_KEY` reais: o `conftest.py` na raiz
+preenche valores dummy quando essas variáveis não existem no ambiente, só o suficiente
+para os módulos importarem sem erro (nenhum teste hoje chama a LLM de verdade).
 
 ## Notas de design
 
-- O **Guardrail de entrada** é heurístico (palavras-chave/regex) — por isso o diagrama
-  original anota "pode ser que não pare". Como segunda camada de proteção, o
-  **Guardrail de saída** sanitiza qualquer vazamento de prompt/código ou dado sensível
-  que tenha passado pelo modelo.
-- O **agente FAQ** não tem acesso a nenhuma tool de banco de dados — ele só orienta sobre
-  funcionalidades e contatos, conforme a nota do diagrama ("Contatos" / "Funcionalidades").
-- Os três agentes de cargo reutilizam `tools/agent_runner.py` para o loop de tool-calling,
-  evitando duplicar a lógica de invocar o modelo, executar a tool e devolver o resultado.
+- O **Guardrail de entrada** primeiro filtra termos proibidos por regex/keyword (bloqueio
+  imediato) e, se passar, anonimiza PII (e-mail, CPF) antes de mandar pro LLM classificador
+  (`guardrail_entrada`), que decide se bloqueia com um motivo estruturado.
+- O **Guardrail de saída** restaura os dados originais (PII) na resposta final, já que o
+  modelo só viu os tokens anonimizados durante o processamento.
+- O agente **FAQ** não tem tools de banco de dados — só orienta sobre funcionalidades e
+  contatos do app.
+- `llm_rapido` (Groq) atende roteamento, orquestração, guardrail de entrada e o agente
+  FAQ — chamadas rápidas e baratas. `llm_especialista` (Gemini) atende os agentes de
+  cargo (Estoquista, Comprador, Supervisor), que fazem tool-calling mais complexo.

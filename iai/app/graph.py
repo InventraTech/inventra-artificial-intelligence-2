@@ -1,44 +1,35 @@
-from dotenv import load_dotenv
-import os
-import operator
-from typing import Annotated
-from langgraph.graph import StateGraph, MessagesState, END
-from langchain_google_genai import ChatGoogleGenerativeAI
-from langchain_groq import ChatGroq
 from langchain.agents import create_agent
-from langgraph.checkpoint.memory import MemorySaver
-from langchain_core.messages import RemoveMessage
-from langchain_core.tools import tool
+from langchain_core.messages import BaseMessage, HumanMessage, RemoveMessage
 from langchain_core.prompts import ChatPromptTemplate
+from langchain_core.tools import tool
+from langgraph.checkpoint.memory import MemorySaver
+from langgraph.graph import END, StateGraph
 
-from prompts import (
-    ROTEADOR_SYSTEM_PROMPT,
-    ORQUESTRADOR_SYSTEM_PROMPT,
-    ESTOQUISTA_SYSTEM_PROMPT,
+from iai.app.guardrail import anonimizar_entrada, guardrail_entrada, guardrail_saida
+from iai.app.llms import llm_especialista, llm_rapido
+from iai.app.prompts import (
     COMPRADOR_SYSTEM_PROMPT,
+    ESTOQUISTA_SYSTEM_PROMPT,
+    FAQ_SYSTEM_PROMPT,
+    ORQUESTRADOR_SYSTEM_PROMPT,
+    ROTEADOR_SYSTEM_PROMPT,
     SUPERVISOR_SYSTEM_PROMPT,
-    FAQ_SYSTEM_PROMPT
 )
-from guardrail import guardrail_entrada, guardrail_saida, anonimizar_entrada
+from iai.app.schemas import Estado
 
-load_dotenv()
 
-llm_gemini = ChatGoogleGenerativeAI(
-    model="gemini-2.5-flash",
-    temperature=0.2, 
-    top_p=0.95,
-    google_api_key=os.getenv("GEMINI_API_KEY")
-)
+def extrair_texto(mensagem: BaseMessage) -> str:
+    """Normaliza o content de uma BaseMessage (str ou list) para str puro."""
+    conteudo = mensagem.content
+    if isinstance(conteudo, str):
+        return conteudo
+    if isinstance(conteudo, list):
+        return " ".join(
+            item if isinstance(item, str) else str(item.get("text", ""))
+            for item in conteudo
+        )
+    return str(conteudo)
 
-llm_groq = ChatGroq(
-    model="openai/gpt-oss-20b",
-    temperature=0.0,
-    top_p=0.95,
-    api_key=os.getenv("GROQ_API_KEY")
-)
-
-llm_especialista = llm_gemini.with_fallbacks([llm_groq])
-llm_rapido = llm_groq
 
 @tool
 def consultar_estoque_mock(item: str) -> str:
@@ -98,15 +89,10 @@ faq_app = create_agent(
     system_prompt=FAQ_SYSTEM_PROMPT
 )
 
-class Estado(MessagesState):
-    agentes_chamados:   Annotated[list[str], operator.add]
-    rota:               str
-    mapa_pii:           dict
-
 def no_guardrail_entrada(estado: Estado) -> dict:
     mensagem_original = list(estado["messages"])[-1]
-    texto_original = mensagem_original.content if hasattr(mensagem_original, 'content') else mensagem_original.text
-    
+    texto_original = extrair_texto(mensagem_original)
+
     texto_anonimizado, mapa = anonimizar_entrada(texto_original)
     resultado = guardrail_entrada(texto_anonimizado)
 
@@ -117,7 +103,10 @@ def no_guardrail_entrada(estado: Estado) -> dict:
             "mapa_pii":         mapa,
             "agentes_chamados": [f"guardrail_entrada:{resultado['motivo']}"]
         }
-    
+
+    if mensagem_original.id is None:
+        raise ValueError("Mensagem sem ID, não é possível remover")
+
     return {
         "messages": [
             RemoveMessage(id=mensagem_original.id),
@@ -131,9 +120,9 @@ def no_guardrail_saida(estado: Estado) -> dict:
     ultima = ""
     for msg in reversed(estado["messages"]):
         if msg.type == "ai" and msg.content:
-            ultima = msg.content
+            ultima = extrair_texto(msg)
             break
-    
+
     resultado = guardrail_saida(ultima, estado.get("mapa_pii"), {})
 
     return {
@@ -142,10 +131,10 @@ def no_guardrail_saida(estado: Estado) -> dict:
     }
 
 def no_roteador(estado: Estado) -> dict:
-    ultima_mensagem = estado["messages"][-1].content if hasattr(estado["messages"][-1], 'content') else estado["messages"][-1].get('content', '')
+    ultima_mensagem = extrair_texto(estado["messages"][-1])
     saida = router_app.invoke({"mensagens": ultima_mensagem})
-    
-    texto = saida.content
+
+    texto = extrair_texto(saida)
 
     if "ROUTE=" not in texto:
         return {
@@ -169,18 +158,18 @@ def no_orquestrador(estado: Estado) -> dict:
     ultima_especialista = ""
     for mensagem in reversed(estado["messages"]):
         if mensagem.type == "ai" and mensagem.content:
-            ultima_especialista = mensagem.content
+            ultima_especialista = extrair_texto(mensagem)
             break
 
     texto_para_orquestrar = f"Formate a resposta a seguir para o usuário final de forma amigável: {ultima_especialista}"
-    
+
     saida = orquestrador_app.invoke({
         "mensagens": texto_para_orquestrar
     })
-    
+
     return {
         "agentes_chamados": [estado["rota"], "orquestrador"],
-        "messages":         [{"role": "assistant", "content": saida.content}],
+        "messages":         [{"role": "assistant", "content": extrair_texto(saida)}],
     }
 
 def decidir_especialista(estado: Estado) -> str:
@@ -191,14 +180,16 @@ def decidir_pos_guardrail_entrada(estado: Estado) -> str:
 
 grafo = StateGraph(Estado)
 
-grafo.add_node("guardrail_entrada", no_guardrail_entrada)
-grafo.add_node("roteador",     no_roteador)
+# ignores abaixo: limitação do stub do langgraph 1.x, que não resolve o overload
+# de add_node para funções simples recebendo um TypedDict de estado.
+grafo.add_node("guardrail_entrada", no_guardrail_entrada)  # type: ignore[call-overload]
+grafo.add_node("roteador",     no_roteador)  # type: ignore[call-overload]
 grafo.add_node("estoquista",   estoquista_app)
 grafo.add_node("comprador",    comprador_app)
 grafo.add_node("supervisor",   supervisor_app)
 grafo.add_node("faq",          faq_app)
-grafo.add_node("orquestrador", no_orquestrador)
-grafo.add_node("guardrail_saida", no_guardrail_saida)
+grafo.add_node("orquestrador", no_orquestrador)  # type: ignore[call-overload]
+grafo.add_node("guardrail_saida", no_guardrail_saida)  # type: ignore[call-overload]
 
 grafo.set_entry_point("guardrail_entrada")
 
@@ -207,7 +198,7 @@ grafo.add_conditional_edges(
     decidir_pos_guardrail_entrada,
     {
         "roteador": "roteador",
-        "fim":        END,       
+        "fim":        END,
     },
 )
 
@@ -234,8 +225,8 @@ memory = MemorySaver()
 fluxo_agentes = grafo.compile(checkpointer=memory)
 
 def executar_fluxo_assessor(pergunta_usuario: str, session_id: str) -> str:
-    estado_inicial = {
-        "messages":           [{"role": "human", "content": pergunta_usuario}],
+    estado_inicial: Estado = {
+        "messages":           [HumanMessage(content=pergunta_usuario)],
         "agentes_chamados":   [],
         "rota":               "",
         "mapa_pii":           {},
@@ -247,33 +238,6 @@ def executar_fluxo_assessor(pergunta_usuario: str, session_id: str) -> str:
     )
 
     print(f"\n[Debug] Agentes chamados: {estado_final['agentes_chamados']}")
-    
+
     ultima_msg = estado_final["messages"][-1]
-    return ultima_msg.content if hasattr(ultima_msg, 'content') else ultima_msg.get('content', '')
-
-if __name__ == "__main__":
-    session_id = "teste_usuario" 
-    print("=====================================================")
-    print("  IAI (Inventra AI) - Teste de Terminal v1")
-    print("  Digite 'sair' para encerrar a conversa.")
-    print("=====================================================\n")
-
-    while True:
-        try:
-            user_input = input("Você: ")
-            if user_input.lower() in ("sair", "end", "fim", "tchau", "bye"):
-                print("IAI: Encerrando a conversa. Até logo!")
-                break
-
-            resposta = executar_fluxo_assessor(
-                pergunta_usuario=user_input,
-                session_id=session_id,
-            )
-            print(f"IAI: {resposta}\n")
-
-        except KeyboardInterrupt:
-            print("\nSaindo...")
-            break
-        except Exception as e:
-            print("Erro ao consumir a API:", e)
-            continue
+    return extrair_texto(ultima_msg)

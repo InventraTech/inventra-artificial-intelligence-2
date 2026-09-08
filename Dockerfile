@@ -31,7 +31,4 @@ USER appuser
     
 EXPOSE 8000
 
-CMD ["python", "main.py"]
-
-# Quando vcs integrarem a Fast API na IA, pode descomentar essa de biaxo e apagar a de cima, a de cima só coloquei pra poder rodar certinho
-# CMD ["uvicorn", "api:app", "--host", "0.0.0.0", "--port", "8000"]
+CMD ["uvicorn", "iai.app.main:app", "--host", "0.0.0.0", "--port", "8000"]

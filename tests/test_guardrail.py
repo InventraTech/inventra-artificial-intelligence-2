@@ -1,4 +1,5 @@
-from guardrail import anonimizar_entrada
+from iai.app.guardrail import anonimizar_entrada
+
 
 def test_anonimiza_email():
     texto = "meu email é joao@teste.com"
@@ -9,7 +10,7 @@ def test_anonimiza_email():
 
 def test_anonimiza_cpf():
     texto = "meu cpf é 123.456.789-00"
-    resultado, mapa = anonimizar_entrada(texto)
+    resultado, _mapa = anonimizar_entrada(texto)
     assert "123.456.789-00" not in resultado
     assert "[CPF_0]" in resultado
 

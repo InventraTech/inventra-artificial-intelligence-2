@@ -1,24 +1,10 @@
-import os
 import re
-from dotenv import load_dotenv
-from pydantic import BaseModel, Field
+
 from langchain_core.prompts import ChatPromptTemplate
-from langchain_groq import ChatGroq
-from prompts import GUARDRAIL_ENTRADA_SYSTEM_PROMPT
 
-load_dotenv()
-
-llm_guardrail = ChatGroq(
-    model="openai/gpt-oss-20b",
-    temperature=0.0,
-    api_key=os.getenv("GROQ_API_KEY")
-)
-
-class ResultadoGuardrail(BaseModel):
-    bloqueado: bool = Field(description="True se a mensagem for proibida. False se permitida.")
-    motivo: str = Field(description="Motivo curto do bloqueio ou permissão.")
-    mensagem: str = Field(description="Mensagem educada se bloqueado. Vazio se permitido.")
-
+from iai.app.llms import llm_rapido
+from iai.app.prompts import GUARDRAIL_ENTRADA_SYSTEM_PROMPT
+from iai.app.schemas import ResultadoGuardrail
 
 TERMOS_PROIBIDOS = [
     "idiota", "burro", "imbecil", "merda", "maldito", "lixo", 
@@ -26,7 +12,7 @@ TERMOS_PROIBIDOS = [
     "me dê uma receita", "como cozinhar"                      
 ]
 
-def verificar(texto: str) -> dict:
+def verificar(texto: str) -> dict | None:
     """Verificação antes de utilizar o prompt do guardrail"""
     texto_limpo = texto.lower()
     for termo in TERMOS_PROIBIDOS:
@@ -70,12 +56,13 @@ def guardrail_entrada(mensagem_usuario: str) -> dict:
         ("system", GUARDRAIL_ENTRADA_SYSTEM_PROMPT),
         ("human", "{mensagem}")
     ])
-    chain = prompt | llm_guardrail.with_structured_output(ResultadoGuardrail)
+    chain = prompt | llm_rapido.with_structured_output(ResultadoGuardrail)
     
     try:
         res = chain.invoke({"mensagem": mensagem_usuario})
+        assert isinstance(res, ResultadoGuardrail)
         return {"bloqueado": res.bloqueado, "motivo": res.motivo, "mensagem": res.mensagem}
-    except Exception as e:
+    except Exception:  # noqa: BLE001 - fail-safe: qualquer erro na chamada ao LLM deve bloquear a mensagem
         return {"bloqueado": True, "motivo": "erro_api", "mensagem": "Erro interno de segurança. Tente novamente."}
 
 def guardrail_saida(texto_gerado: str, mapa_pii: dict, extra: dict) -> dict:
