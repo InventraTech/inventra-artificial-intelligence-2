@@ -16,6 +16,7 @@ from iai.app.prompts import (
     SUPERVISOR_SYSTEM_PROMPT,
 )
 from iai.app.schemas import Estado
+from iai.app.tools.faq import faq_retriever
 
 
 def extrair_texto(mensagem: BaseMessage) -> str:
@@ -47,11 +48,6 @@ def criar_requisicao_mock(item: str, quantidade: int) -> str:
 def relatorio_desperdicio_mock() -> str:
     """Gera um panorama de itens críticos."""
     return "Relatório: 5kg de tomate vencem amanhã. 2L de leite vencem em 2 dias."
-
-@tool
-def faq_retriever_mock(pergunta: str) -> str:
-    """Consulta a base de conhecimento do app Inventra."""
-    return "Para cadastrar um produto, vá no menu lateral esquerdo e clique em 'Produtos'."
 
 router_prompt = ChatPromptTemplate.from_messages([
     ("system", ROTEADOR_SYSTEM_PROMPT), 
@@ -85,7 +81,7 @@ supervisor_app = create_agent(
 
 faq_app = create_agent(
     model=llm_rapido,
-    tools=[faq_retriever_mock],
+    tools=[faq_retriever],
     system_prompt=FAQ_SYSTEM_PROMPT
 )
 
