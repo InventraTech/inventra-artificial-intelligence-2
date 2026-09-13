@@ -61,19 +61,22 @@ orquestrador_prompt = ChatPromptTemplate.from_messages([
 ])
 orquestrador_app = orquestrador_prompt | llm_rapido
 
-estoquista_app = create_agent(
+# ignores abaixo: llm_especialista é um RunnableWithFallbacks (via .with_fallbacks()),
+# que se comporta como um BaseChatModel em tempo de execução mas não está coberto pelos
+# overloads de create_agent no stub do langchain 1.x.
+estoquista_app = create_agent(  # type: ignore[call-overload]
     model=llm_especialista,
     tools=[consultar_estoque_mock],
     system_prompt=ESTOQUISTA_SYSTEM_PROMPT
 )
 
-comprador_app = create_agent(
+comprador_app = create_agent(  # type: ignore[call-overload]
     model=llm_especialista,
     tools=[criar_requisicao_mock],
     system_prompt=COMPRADOR_SYSTEM_PROMPT
 )
 
-supervisor_app = create_agent(
+supervisor_app = create_agent(  # type: ignore[call-overload]
     model=llm_especialista,
     tools=[relatorio_desperdicio_mock],
     system_prompt=SUPERVISOR_SYSTEM_PROMPT
