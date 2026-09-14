@@ -7,6 +7,7 @@ from pydantic import SecretStr
 BASE_DIR = Path(__file__).resolve().parent.parent
 DATA_DIR = BASE_DIR / "data"
 FRONTEND_DIR = BASE_DIR / "frontend"
+FAQ_PATH = DATA_DIR / "faq_inventra.jsonl"
 
 load_dotenv(BASE_DIR / ".env")
 

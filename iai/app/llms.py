@@ -17,4 +17,4 @@ llm_rapido = ChatGroq(
     stop_sequences=None
 )
 
-llm_especialista = llm_gemini
+llm_especialista = llm_gemini.with_fallbacks([llm_rapido])
