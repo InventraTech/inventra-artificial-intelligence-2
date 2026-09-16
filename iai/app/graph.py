@@ -5,7 +5,12 @@ from langchain_core.tools import tool
 from langgraph.checkpoint.memory import MemorySaver
 from langgraph.graph import END, StateGraph
 
-from iai.app.guardrail import anonimizar_entrada, guardrail_entrada, guardrail_saida
+from iai.app.guardrail import (
+    anonimizar_entrada,
+    guardrail_escopo,
+    guardrail_insulto,
+    guardrail_saida,
+)
 from iai.app.llms import llm_especialista, llm_rapido
 from iai.app.prompts import (
     COMPRADOR_SYSTEM_PROMPT,
@@ -88,19 +93,19 @@ faq_app = create_agent(
     system_prompt=FAQ_SYSTEM_PROMPT
 )
 
-def no_guardrail_entrada(estado: Estado) -> dict:
+def no_guardrail_insulto(estado: Estado) -> dict:
     mensagem_original = list(estado["messages"])[-1]
     texto_original = extrair_texto(mensagem_original)
 
     texto_anonimizado, mapa = anonimizar_entrada(texto_original)
-    resultado = guardrail_entrada(texto_anonimizado)
+    resultado = guardrail_insulto(texto_anonimizado)
 
     if resultado["bloqueado"]:
         return {
             "messages":         [{"role": "assistant", "content": resultado["mensagem"]}],
             "rota":             "fim",
             "mapa_pii":         mapa,
-            "agentes_chamados": [f"guardrail_entrada:{resultado['motivo']}"]
+            "agentes_chamados": [f"guardrail_insulto:{resultado['motivo']}"]
         }
 
     if mensagem_original.id is None:
@@ -112,7 +117,22 @@ def no_guardrail_entrada(estado: Estado) -> dict:
             {"role": "human", "content": texto_anonimizado}
         ],
         "mapa_pii":         mapa,
-        "agentes_chamados": ["guardrail_entrada:aprovado"],
+        "agentes_chamados": ["guardrail_insulto:aprovado"],
+    }
+
+def no_guardrail_escopo(estado: Estado) -> dict:
+    texto = extrair_texto(estado["messages"][-1])
+    resultado = guardrail_escopo(texto)
+
+    if resultado["bloqueado"]:
+        return {
+            "messages":         [{"role": "assistant", "content": resultado["mensagem"]}],
+            "rota":             "fim",
+            "agentes_chamados": [f"guardrail_escopo:{resultado['motivo']}"]
+        }
+
+    return {
+        "agentes_chamados": ["guardrail_escopo:aprovado"],
     }
 
 def no_guardrail_saida(estado: Estado) -> dict:
@@ -174,14 +194,18 @@ def no_orquestrador(estado: Estado) -> dict:
 def decidir_especialista(estado: Estado) -> str:
     return estado["rota"] if estado["rota"] in ("estoquista", "comprador", "supervisor", "faq") else "fim"
 
-def decidir_pos_guardrail_entrada(estado: Estado) -> str:
+def decidir_pos_guardrail_insulto(estado: Estado) -> str:
+    return "guardrail_escopo" if estado["rota"] != "fim" else "fim"
+
+def decidir_pos_guardrail_escopo(estado: Estado) -> str:
     return "roteador" if estado["rota"] != "fim" else "fim"
 
 grafo = StateGraph(Estado)
 
 # ignores abaixo: limitação do stub do langgraph 1.x, que não resolve o overload
 # de add_node para funções simples recebendo um TypedDict de estado.
-grafo.add_node("guardrail_entrada", no_guardrail_entrada)  # type: ignore[call-overload]
+grafo.add_node("guardrail_insulto", no_guardrail_insulto)  # type: ignore[call-overload]
+grafo.add_node("guardrail_escopo", no_guardrail_escopo)  # type: ignore[call-overload]
 grafo.add_node("roteador",     no_roteador)  # type: ignore[call-overload]
 grafo.add_node("estoquista",   estoquista_app)
 grafo.add_node("comprador",    comprador_app)
@@ -190,11 +214,20 @@ grafo.add_node("faq",          faq_app)
 grafo.add_node("orquestrador", no_orquestrador)  # type: ignore[call-overload]
 grafo.add_node("guardrail_saida", no_guardrail_saida)  # type: ignore[call-overload]
 
-grafo.set_entry_point("guardrail_entrada")
+grafo.set_entry_point("guardrail_insulto")
 
 grafo.add_conditional_edges(
-    "guardrail_entrada",
-    decidir_pos_guardrail_entrada,
+    "guardrail_insulto",
+    decidir_pos_guardrail_insulto,
+    {
+        "guardrail_escopo": "guardrail_escopo",
+        "fim":                END,
+    },
+)
+
+grafo.add_conditional_edges(
+    "guardrail_escopo",
+    decidir_pos_guardrail_escopo,
     {
         "roteador": "roteador",
         "fim":        END,

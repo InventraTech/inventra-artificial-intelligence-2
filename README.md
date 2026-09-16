@@ -4,13 +4,15 @@ IA multiagente para o app **Inventra**, exposta como serviço HTTP (FastAPI), se
 
 ```
 User
-  -> Guardrail entrada (palavrões / prompt injection / anonimiza PII)
+  -> Guardrail Insulto (termos proibidos / prompt injection / anonimiza PII / modelo de moderação)
        -> [bloqueado] Parar resposta
-       -> [ok] -> Roteador -> Agente do cargo:
-                                Estoquista
-                                Comprador
-                                Supervisor
-                                FAQ           -> Orquestrador -> Guardrail Saída -> User
+       -> [ok] -> Guardrail Escopo (pergunta pertence ao Inventra?)
+                    -> [bloqueado] Parar resposta
+                    -> [ok] -> Roteador -> Agente do cargo:
+                                             Estoquista
+                                             Comprador
+                                             Supervisor
+                                             FAQ           -> Orquestrador -> Guardrail Saída -> User
 ```
 
 ## Estrutura de pastas
@@ -24,9 +26,9 @@ inventra-ai-2/
 │   └── app/
 │       ├── main.py             # app FastAPI: monta rotas e expõe GET /health
 │       ├── config.py           # lê o .env, expõe GEMINI_API_KEY/GROQ_API_KEY (SecretStr) e FAQ_PATH
-│       ├── llms.py             # instancia os modelos (Gemini via llm_especialista, Groq via llm_rapido)
+│       ├── llms.py             # instancia os modelos (Gemini via llm_especialista, Groq via llm_rapido e llm_guardrail)
 │       ├── schemas.py          # Estado do grafo (Estado), ChatRequest/ChatResponse, ResultadoGuardrail
-│       ├── guardrail.py        # guardrail_entrada, guardrail_saida, anonimizar_entrada (PII)
+│       ├── guardrail.py        # guardrail_insulto, guardrail_escopo, guardrail_saida, anonimizar_entrada (PII)
 │       ├── prompts.py          # system prompts de cada agente/etapa
 │       ├── graph.py            # monta o grafo (LangGraph) e expõe executar_fluxo_assessor
 │       ├── tools/
@@ -35,6 +37,7 @@ inventra-ai-2/
 │           └── chat.py         # POST /chat, chama executar_fluxo_assessor
 ├── tests/
 │   ├── test_guardrail.py
+│   ├── test_graph.py
 │   └── test_faq.py
 ├── conftest.py                 # env vars dummy para rodar os testes sem credenciais reais
 ├── pytest.ini                  # pythonpath=. (necessário pois não há __init__.py em iai/)
@@ -99,15 +102,25 @@ set -a && source iai/.env && set +a && RUN_LLM_TESTS=1 pytest tests/test_faq.py
 
 ## Notas de design
 
-- O **Guardrail de entrada** primeiro filtra termos proibidos por regex/keyword (bloqueio
-  imediato) e, se passar, anonimiza PII (e-mail, CPF) antes de mandar pro LLM classificador
-  (`guardrail_entrada`), que decide se bloqueia com um motivo estruturado.
-- O **Guardrail de saída** restaura os dados originais (PII) na resposta final, já que o
-  modelo só viu os tokens anonimizados durante o processamento.
+- A entrada passa por **dois guardrails em sequência**, cada um como node próprio do grafo:
+  1. **`guardrail_insulto`**: primeiro filtra tentativas clássicas de jailbreak/prompt
+     injection (PT e EN) por regex sobre o texto normalizado (sem acento, minúsculo —
+     `normalizar_texto`), bloqueio imediato e sem custo de LLM. Se passar, anonimiza PII
+     antes de mandar pro modelo de moderação `openai/gpt-oss-safeguard-20b`
+     (`llm_guardrail`), que identifica insultos/abuso.
+  2. **`guardrail_escopo`**: só roda se o primeiro aprovar; usa `llm_rapido` para classificar
+     se a mensagem (já anonimizada) pertence ao escopo do Inventra.
+  Bloqueio em qualquer um dos dois guardrails encerra o fluxo direto pro usuário, sem passar
+  pelo roteador.
+- A anonimização de PII (`anonimizar_entrada`, chamada dentro do `guardrail_insulto`) cobre
+  e-mail, CPF, RG e telefone; os padrões regex ficam centralizados em `PADROES_PII` no topo
+  de `guardrail.py`. O **Guardrail de saída** restaura os dados originais na resposta final,
+  já que o modelo só viu os tokens anonimizados durante o processamento.
 - O agente **FAQ** não tem tools de banco de dados — só orienta sobre funcionalidades e
   contatos do app, usando a tool `faq_retriever` (`iai/app/tools/faq.py`), que carrega a
   base de perguntas e respostas de `iai/data/faq_inventra.jsonl` via `JSONLoader` e deixa
   o próprio LLM escolher a entrada que melhor responde à pergunta do usuário.
-- `llm_rapido` (Groq) atende roteamento, orquestração, guardrail de entrada e o agente
-  FAQ — chamadas rápidas e baratas. `llm_especialista` (Gemini) atende os agentes de
+- `llm_rapido` (Groq) atende roteamento, orquestração, guardrail de escopo e o agente
+  FAQ — chamadas rápidas e baratas. `llm_guardrail` (Groq, `gpt-oss-safeguard-20b`) atende
+  só o guardrail de insulto/moderação. `llm_especialista` (Gemini) atende os agentes de
   cargo (Estoquista, Comprador, Supervisor), que fazem tool-calling mais complexo.

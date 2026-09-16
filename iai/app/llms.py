@@ -17,4 +17,10 @@ llm_rapido = ChatGroq(
     stop_sequences=None
 )
 
+llm_guardrail = ChatGroq(
+    model="openai/gpt-oss-safeguard-20b",
+    temperature=0.0,
+    api_key=GROQ_API_KEY
+)
+
 llm_especialista = llm_gemini.with_fallbacks([llm_rapido])
