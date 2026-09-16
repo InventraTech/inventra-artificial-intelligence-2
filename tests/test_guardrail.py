@@ -1,7 +1,12 @@
 from langchain_core.runnables import RunnableLambda
 
 import iai.app.guardrail as guardrail_module
-from iai.app.guardrail import anonimizar_entrada, guardrail_escopo, guardrail_insulto, verificar
+from iai.app.guardrail import (
+    anonimizar_entrada,
+    guardrail_escopo,
+    guardrail_insulto,
+    verificar,
+)
 from iai.app.schemas import ResultadoGuardrail
 
 

@@ -3,15 +3,12 @@ import unicodedata
 
 from langchain_core.prompts import ChatPromptTemplate
 
-from iai.app.llms import llm_rapido, llm_guardrail
-
+from iai.app.llms import llm_guardrail, llm_rapido
 from iai.app.prompts import (
     GUARDRAIL_ENTRADA_SYSTEM_PROMPT,
     GUARDRAIL_INSULTO_SYSTEM_PROMPT,
 )
-
 from iai.app.schemas import ResultadoGuardrail
-
 
 TERMOS_PROIBIDOS = [
     r"ignor[ae]\s+(todas\s+)?(as\s+)?instrucoes",
@@ -110,7 +107,7 @@ def verificar_insulto(mensagem: str) -> dict | None:
 
         return None
 
-    except Exception:
+    except Exception:  # noqa: BLE001 - fail-safe: qualquer erro na chamada ao LLM deve bloquear a mensagem
         return {
             "bloqueado": True,
             "motivo": "erro_api_safeguard",
@@ -162,7 +159,7 @@ def guardrail_escopo(mensagem: str) -> dict:
             "mensagem": res.mensagem,
         }
 
-    except Exception:
+    except Exception:  # noqa: BLE001 - fail-safe: qualquer erro na chamada ao LLM deve bloquear a mensagem
         return {
             "bloqueado": True,
             "motivo": "erro_api",
