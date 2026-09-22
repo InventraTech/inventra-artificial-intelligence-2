@@ -25,16 +25,17 @@ inventra-ai-2/
 │   │   └── faq_inventra.jsonl  # base de conhecimento do agente FAQ (pares pergunta/resposta)
 │   └── app/
 │       ├── main.py             # app FastAPI: monta rotas e expõe GET /health
-│       ├── config.py           # lê o .env, expõe GEMINI_API_KEY/GROQ_API_KEY (SecretStr) e FAQ_PATH
+│       ├── config.py           # lê o .env, expõe GEMINI_API_KEY/GROQ_API_KEY/MONGO_CONNECTION (SecretStr) e FAQ_PATH
 │       ├── llms.py             # instancia os modelos (Gemini via llm_especialista, Groq via llm_rapido e llm_guardrail)
-│       ├── schemas.py          # Estado do grafo (Estado), ChatRequest/ChatResponse, ResultadoGuardrail
+│       ├── schemas.py          # Estado do grafo (Estado), ChatRequest/ChatResponse, ResultadoGuardrail, schemas de sessão/histórico
 │       ├── guardrail.py        # guardrail_insulto, guardrail_escopo, guardrail_saida, anonimizar_entrada (PII)
 │       ├── prompts.py          # system prompts de cada agente/etapa
 │       ├── graph.py            # monta o grafo (LangGraph) e expõe executar_fluxo_assessor
+│       ├── memory.py           # persiste chats no Mongo: salvar_mensagem, encerrar_sessao (gera resumo via LLM), recuperar_historico/recuperar_mensagem
 │       ├── tools/
 │       │   └── faq.py          # tool faq_retriever: lê faq_inventra.jsonl via JSONLoader
 │       └── routes/
-│           └── chat.py         # POST /chat, chama executar_fluxo_assessor
+│           └── chat.py         # POST /chat, POST /chat/encerrar, GET /chat/historico/{user_id}, GET /chat/mensagens/{doc_id}
 ├── tests/
 │   ├── test_guardrail.py
 │   ├── test_graph.py
@@ -57,6 +58,7 @@ mensagem do usuário, e o Orquestrador formata a resposta final antes do guardra
    ```
    GEMINI_API_KEY=...
    GROQ_API_KEY=...
+   MONGO_CONNECTION=mongodb+srv://usuario:senha@cluster.mongodb.net/
    ```
    (repare que o `.env` fica dentro de `iai/`, não na raiz do projeto — é onde `config.py` procura.)
 2. Instale as dependências:
@@ -69,7 +71,10 @@ mensagem do usuário, e o Orquestrador formata a resposta final antes do guardra
    ```
 4. Com o servidor no ar:
    - `GET http://127.0.0.1:8000/health` → `{"status": "ok"}`
-   - `POST http://127.0.0.1:8000/chat` com corpo `{"session_id": "teste", "pergunta": "quantos tomates temos em estoque?"}` → resposta do fluxo de agentes
+   - `POST http://127.0.0.1:8000/chat` com corpo `{"session_id": "teste", "user_id": "user1", "pergunta": "quantos tomates temos em estoque?"}` → resposta do fluxo de agentes (a mensagem e a resposta já ficam salvas no Mongo)
+   - `POST http://127.0.0.1:8000/chat/encerrar` com `{"session_id": "teste"}` → encerra a sessão e gera um resumo da conversa via LLM
+   - `GET http://127.0.0.1:8000/chat/historico/{user_id}` → lista as sessões já encerradas desse usuário (resumo + data)
+   - `GET http://127.0.0.1:8000/chat/mensagens/{doc_id}` → mensagens completas de uma sessão (o `doc_id` vem do histórico acima)
 
 ## Docker
 
@@ -124,3 +129,11 @@ set -a && source iai/.env && set +a && RUN_LLM_TESTS=1 pytest tests/test_faq.py
   FAQ — chamadas rápidas e baratas. `llm_guardrail` (Groq, `gpt-oss-safeguard-20b`) atende
   só o guardrail de insulto/moderação. `llm_especialista` (Gemini) atende os agentes de
   cargo (Estoquista, Comprador, Supervisor), que fazem tool-calling mais complexo.
+- **Persistência de chat** (`memory.py`): toda mensagem trocada em `/chat` é salva na
+  coleção `dbIAI.sessions` do Mongo, vinculada a `session_id`/`user_id`. Uma sessão fica
+  "ativa" (sem `summary`) até alguém chamar `/chat/encerrar`, que lê as mensagens salvas e
+  pede pro `llm_rapido` gerar um resumo curto da conversa. É esse fechamento explícito —
+  chamado pelo app quando o usuário sai do chat — que separa uma sessão da próxima com o
+  mesmo `session_id`; não há expiração automática por tempo. Importante: isso é o *log* da
+  conversa, não o estado usado pelo LangGraph pra responder — esse continua no `MemorySaver`
+  (`graph.py`), que é em memória e some a cada restart do processo.
