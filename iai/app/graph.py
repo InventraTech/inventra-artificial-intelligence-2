@@ -12,6 +12,7 @@ from iai.app.guardrail import (
     guardrail_saida,
 )
 from iai.app.llms import llm_especialista, llm_rapido
+from iai.app.memory import iniciar_sessao, salvar_mensagem
 from iai.app.prompts import (
     COMPRADOR_SYSTEM_PROMPT,
     ESTOQUISTA_SYSTEM_PROMPT,
@@ -256,7 +257,9 @@ grafo.add_edge("faq",          "guardrail_saida")
 memory = MemorySaver()
 fluxo_agentes = grafo.compile(checkpointer=memory)
 
-def executar_fluxo_assessor(pergunta_usuario: str, session_id: str) -> str:
+def executar_fluxo_assessor(pergunta_usuario: str, session_id: str, user_id: str = "user_test") -> str:
+    iniciar_sessao(session_id, user_id=user_id)
+
     estado_inicial: Estado = {
         "messages":           [HumanMessage(content=pergunta_usuario)],
         "agentes_chamados":   [],
@@ -269,7 +272,12 @@ def executar_fluxo_assessor(pergunta_usuario: str, session_id: str) -> str:
         config={"configurable": {"thread_id": session_id}},
     )
 
+    pergunta_anonimizada, _ = anonimizar_entrada(pergunta_usuario)
+    resposta_final = extrair_texto(estado_final["messages"][-1])
+
+    salvar_mensagem(session_id, "human", pergunta_anonimizada, user_id=user_id)
+    salvar_mensagem(session_id, "iai", resposta_final, user_id=user_id)
+
     print(f"\n[Debug] Agentes chamados: {estado_final['agentes_chamados']}")
 
-    ultima_msg = estado_final["messages"][-1]
-    return extrair_texto(ultima_msg)
+    return resposta_final

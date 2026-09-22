@@ -7,6 +7,7 @@ from iai.app.guardrail import (
     guardrail_insulto,
     verificar,
 )
+from iai.app.prompts import GUARDRAIL_ENTRADA_SYSTEM_PROMPT
 from iai.app.schemas import ResultadoGuardrail
 
 
@@ -38,6 +39,18 @@ def test_guardrail_escopo_falha_segura_quando_llm_da_erro(monkeypatch):
     resultado = guardrail_escopo("quantos tomates temos em estoque?")
     assert resultado["bloqueado"] is True
     assert resultado["motivo"] == "erro_api"
+
+
+def test_guardrail_escopo_aprova_pergunta_sobre_ocr(monkeypatch):
+    resultado_fake = ResultadoGuardrail(bloqueado=False, motivo="dentro_do_escopo", mensagem="")
+    monkeypatch.setattr(guardrail_module, "llm_rapido", _LlmFalso(resultado=resultado_fake))
+    resultado = guardrail_escopo("o cadastro por foto com OCR funciona sozinho?")
+    assert resultado == {"bloqueado": False, "motivo": "dentro_do_escopo", "mensagem": ""}
+
+
+def test_prompt_guardrail_escopo_explica_ocr_como_permitido():
+    assert "OCR" in GUARDRAIL_ENTRADA_SYSTEM_PROMPT
+    assert "PERMITIDA" in GUARDRAIL_ENTRADA_SYSTEM_PROMPT
 
 
 def test_guardrail_insulto_bloqueia_quando_modelo_detecta(monkeypatch):
