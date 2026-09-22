@@ -3,6 +3,7 @@ from datetime import datetime, timezone
 from typing import Any
 
 from pymongo import MongoClient
+from pymongo.errors import PyMongoError
 
 from iai.app.config import MONGO_CONNECTION
 from iai.app.llms import llm_rapido
@@ -13,8 +14,11 @@ mongo: MongoClient[dict[str, Any]] = MongoClient(MONGO_CONNECTION.get_secret_val
 db = mongo["dbIAI"]
 col_sessoes = db["sessions"]
 
-col_sessoes.create_index("session_id")
-col_sessoes.create_index([("user_id", 1), ("started_at", -1)])
+try:
+    col_sessoes.create_index("session_id")
+    col_sessoes.create_index([("user_id", 1), ("started_at", -1)])
+except PyMongoError:
+    pass  
 
 sessoes_ativas: dict[str, str] = {}
 
