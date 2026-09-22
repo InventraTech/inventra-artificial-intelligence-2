@@ -13,10 +13,12 @@ load_dotenv(BASE_DIR / ".env")
 
 GEMINI_API_KEY = SecretStr(os.getenv("GEMINI_API_KEY", ""))
 GROQ_API_KEY = SecretStr(os.getenv("GROQ_API_KEY", ""))
+MONGO_CONNECTION = SecretStr(os.getenv("MONGO_CONNECTION", "mongodb://localhost:27017"))
 
 OBRIGATORIAS = {
     "GEMINI_API_KEY": GEMINI_API_KEY,
-    "GROQ_API_KEY": GROQ_API_KEY
+    "GROQ_API_KEY": GROQ_API_KEY,
+    "MONGO_CONNECTION": MONGO_CONNECTION
 }
 
 def validar_config() -> list[str]:
