@@ -16,7 +16,7 @@ col_sessoes = db["sessions"]
 col_sessoes.create_index("session_id")
 col_sessoes.create_index([("user_id", 1), ("started_at", -1)])
 
-sessoes_ativas: dict = {}
+sessoes_ativas: dict[str, str] = {}
 
 def agora() -> datetime:
     return datetime.now(timezone.utc)
@@ -46,7 +46,7 @@ def doc_id_da_sessao(session_id: str) -> str | None:
         return doc_id
 
     doc = col_sessoes.find_one(
-        {"session_id": session_id, "resumo": {"$in": ["", None]}},
+        {"session_id": session_id, "summary": {"$in": ["", None]}},
         {"_id": 1},
         sort=[("started_at", -1)]
     )
@@ -94,9 +94,10 @@ def encerrar_sessao(session_id: str) -> str:
         return ""
 
     doc = col_sessoes.find_one({"_id": doc_id})
-    
+
+    sessoes_ativas.pop(session_id, None)
+
     if not doc or not doc.get("messages"):
-        sessoes_ativas.pop(session_id, None)
         return ""
 
     resumo = gerar_resumo(doc["messages"])
