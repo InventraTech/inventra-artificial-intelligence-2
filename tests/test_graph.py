@@ -112,24 +112,24 @@ def test_no_guardrail_saida_restaura_pii():
 
 def test_no_roteador_com_route(monkeypatch):
     monkeypatch.setattr(
-        g, "router_app", SimpleNamespace(invoke=lambda *_a, **_k: SimpleNamespace(
-            content="ROUTE=faq\nPERGUNTA_ORIGINAL=qual o email de contato?"
-        ))
+        g, "router_app", SimpleNamespace(invoke=lambda *_a, **_k: {
+            "messages": [AIMessage(content="ROUTE=faq\nPERGUNTA_ORIGINAL=qual o email de contato?")]
+        })
     )
     estado = {"messages": [HumanMessage(content="qual o email de contato?")]}
-    resultado = g.no_roteador(estado)
+    resultado = g.no_roteador(estado, config={})
     assert resultado["rota"] == "faq"
     assert resultado["agentes_chamados"] == ["roteador"]
 
 
 def test_no_roteador_sem_route_responde_direto(monkeypatch):
     monkeypatch.setattr(
-        g, "router_app", SimpleNamespace(invoke=lambda *_a, **_k: SimpleNamespace(
-            content="Bom dia! Como posso ajudar?"
-        ))
+        g, "router_app", SimpleNamespace(invoke=lambda *_a, **_k: {
+            "messages": [AIMessage(content="Bom dia! Como posso ajudar?")]
+        })
     )
     estado = {"messages": [HumanMessage(content="bom dia")]}
-    resultado = g.no_roteador(estado)
+    resultado = g.no_roteador(estado, config={})
     assert resultado["rota"] == "fim"
     assert resultado["messages"][0]["content"] == "Bom dia! Como posso ajudar?"
 

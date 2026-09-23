@@ -1,6 +1,7 @@
 from langchain.agents import create_agent
 from langchain_core.messages import BaseMessage, HumanMessage, RemoveMessage
 from langchain_core.prompts import ChatPromptTemplate
+from langchain_core.runnables import RunnableConfig
 from langchain_core.tools import tool
 from langgraph.checkpoint.memory import MemorySaver
 from langgraph.graph import END, StateGraph
@@ -23,6 +24,7 @@ from iai.app.prompts import (
 )
 from iai.app.schemas import Estado
 from iai.app.tools.faq import faq_retriever
+from iai.app.tools.memoria import TOOLS_MEMORIA
 
 
 def extrair_texto(mensagem: BaseMessage) -> str:
@@ -55,11 +57,11 @@ def relatorio_desperdicio_mock() -> str:
     """Gera um panorama de itens críticos."""
     return "Relatório: 5kg de tomate vencem amanhã. 2L de leite vencem em 2 dias."
 
-router_prompt = ChatPromptTemplate.from_messages([
-    ("system", ROTEADOR_SYSTEM_PROMPT), 
-    ("human", "{mensagens}")
-])
-router_app = router_prompt | llm_rapido
+router_app = create_agent(
+    model=llm_rapido,
+    tools=TOOLS_MEMORIA,
+    system_prompt=ROTEADOR_SYSTEM_PROMPT
+)
 
 orquestrador_prompt = ChatPromptTemplate.from_messages([
     ("system", ORQUESTRADOR_SYSTEM_PROMPT), 
@@ -67,24 +69,21 @@ orquestrador_prompt = ChatPromptTemplate.from_messages([
 ])
 orquestrador_app = orquestrador_prompt | llm_rapido
 
-# ignores abaixo: llm_especialista é um RunnableWithFallbacks (via .with_fallbacks()),
-# que se comporta como um BaseChatModel em tempo de execução mas não está coberto pelos
-# overloads de create_agent no stub do langchain 1.x.
 estoquista_app = create_agent(  # type: ignore[call-overload]
     model=llm_especialista,
-    tools=[consultar_estoque_mock],
+    tools=[consultar_estoque_mock] + TOOLS_MEMORIA,
     system_prompt=ESTOQUISTA_SYSTEM_PROMPT
 )
 
 comprador_app = create_agent(  # type: ignore[call-overload]
     model=llm_especialista,
-    tools=[criar_requisicao_mock],
+    tools=[criar_requisicao_mock] + TOOLS_MEMORIA,
     system_prompt=COMPRADOR_SYSTEM_PROMPT
 )
 
 supervisor_app = create_agent(  # type: ignore[call-overload]
     model=llm_especialista,
-    tools=[relatorio_desperdicio_mock],
+    tools=[relatorio_desperdicio_mock] + TOOLS_MEMORIA,
     system_prompt=SUPERVISOR_SYSTEM_PROMPT
 )
 
@@ -150,11 +149,11 @@ def no_guardrail_saida(estado: Estado) -> dict:
        "agentes_chamados": ["guardrail_saida"]
     }
 
-def no_roteador(estado: Estado) -> dict:
+def no_roteador(estado: Estado, config: RunnableConfig) -> dict:
     ultima_mensagem = extrair_texto(estado["messages"][-1])
-    saida = router_app.invoke({"mensagens": ultima_mensagem})
+    saida = router_app.invoke({"messages": [HumanMessage(content=ultima_mensagem)]}, config=config)
 
-    texto = extrair_texto(saida)
+    texto = extrair_texto(saida["messages"][-1])
 
     if "ROUTE=" not in texto:
         return {
@@ -203,8 +202,6 @@ def decidir_pos_guardrail_escopo(estado: Estado) -> str:
 
 grafo = StateGraph(Estado)
 
-# ignores abaixo: limitação do stub do langgraph 1.x, que não resolve o overload
-# de add_node para funções simples recebendo um TypedDict de estado.
 grafo.add_node("guardrail_insulto", no_guardrail_insulto)  # type: ignore[call-overload]
 grafo.add_node("guardrail_escopo", no_guardrail_escopo)  # type: ignore[call-overload]
 grafo.add_node("roteador",     no_roteador)  # type: ignore[call-overload]
@@ -269,7 +266,7 @@ def executar_fluxo_assessor(pergunta_usuario: str, session_id: str, user_id: str
 
     estado_final = fluxo_agentes.invoke(
         estado_inicial,
-        config={"configurable": {"thread_id": session_id}},
+        config={"configurable": {"thread_id": session_id, "user_id": user_id}},
     )
 
     pergunta_anonimizada, _ = anonimizar_entrada(pergunta_usuario)
