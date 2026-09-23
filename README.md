@@ -33,7 +33,8 @@ inventra-ai-2/
 │       ├── graph.py            # monta o grafo (LangGraph) e expõe executar_fluxo_assessor
 │       ├── memory.py           # persiste chats no Mongo: salvar_mensagem, encerrar_sessao (gera resumo via LLM), recuperar_historico/recuperar_mensagem
 │       ├── tools/
-│       │   └── faq.py          # tool faq_retriever: lê faq_inventra.jsonl via JSONLoader
+│       │   ├── faq.py          # tool faq_retriever: lê faq_inventra.jsonl via JSONLoader
+│       │   └── memoria.py      # tool buscar_historico: consulta resumos de sessões anteriores do mesmo user_id
 │       └── routes/
 │           └── chat.py         # POST /chat, POST /chat/encerrar, GET /chat/historico/{user_id}, GET /chat/mensagens/{doc_id}
 ├── tests/
@@ -137,3 +138,16 @@ set -a && source iai/.env && set +a && RUN_LLM_TESTS=1 pytest tests/test_faq.py
   mesmo `session_id`; não há expiração automática por tempo. Importante: isso é o *log* da
   conversa, não o estado usado pelo LangGraph pra responder — esse continua no `MemorySaver`
   (`graph.py`), que é em memória e some a cada restart do processo.
+- **Memória de longo prazo** (`tools/memoria.py`): a tool `buscar_historico` consulta, via
+  `recuperar_historico`, os resumos já gerados (sessões encerradas) do **mesmo `user_id`** —
+  não do `session_id` atual, então uma sessão nova do mesmo usuário enxerga o que ele
+  perguntou em sessões passadas, mas um `user_id` diferente nunca vê o histórico de outro.
+  O Roteador e os três agentes de cargo (Estoquista, Comprador, Supervisor) recebem essa
+  tool; o `ROTEADOR_SYSTEM_PROMPT` instrui explicitamente quando usá-la (perguntas tipo "o
+  que eu perguntei da última vez?"), e o `GUARDRAIL_ENTRADA_SYSTEM_PROMPT` permite esse tipo
+  de pergunta passar mesmo sem citar estoque/compras. Pra tool conseguir identificar o
+  usuário, `executar_fluxo_assessor` propaga `user_id` (além de `thread_id`) no
+  `configurable` do grafo — sem isso a tool não sabe de quem buscar o histórico. Hoje o
+  `user_id` do `ChatRequest` é informado livremente pelo chamador da API, sem autenticação;
+  a garantia de isolamento por usuário depende de quem estiver na frente do IAI (app/gateway)
+  sempre mandar o `user_id` correto.
