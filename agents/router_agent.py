@@ -11,7 +11,7 @@ por palavras-chave — suficiente pois o professor usa esse mesmo estilo de regr
 nos outros exemplos (ex.: _resolve_type_id). select_specialist() cobre a segunda decisão,
 mapeando o cargo já conhecido do usuário (informado pelo app) para o módulo do agente.
 """
-from agents import estoquista_agent, comprador_agent, supervisor_agent
+from agents import comprador_agent, estoquista_agent, supervisor_agent
 
 PALAVRAS_CHAVE_FAQ = [
     "o que é o inventra", "como funciona o inventra", "como uso", "como usar",
