@@ -12,7 +12,12 @@ User
                                              Estoquista
                                              Comprador
                                              Supervisor
-                                             FAQ           -> Orquestrador -> Guardrail Saída -> User
+                                             FAQ
+                                               -> Juiz (confere a resposta contra os fatos que o agente achou)
+                                                    -> [reprovado, confiança < 0.7] volta pro mesmo agente (até 3x)
+                                                    -> [aprovado] -> Orquestrador* -> Guardrail Saída -> User
+
+  * FAQ pula o Orquestrador e vai direto pro Guardrail Saída
 ```
 
 ## Estrutura de pastas
@@ -27,11 +32,12 @@ inventra-ai-2/
 │       ├── main.py             # app FastAPI: monta rotas e expõe GET /health
 │       ├── config.py           # lê o .env, expõe GEMINI_API_KEY/GROQ_API_KEY/MONGO_CONNECTION (SecretStr) e FAQ_PATH
 │       ├── llms.py             # instancia os modelos (Gemini via llm_especialista, Groq via llm_rapido e llm_guardrail)
-│       ├── schemas.py          # Estado do grafo (Estado), ChatRequest/ChatResponse, ResultadoGuardrail, schemas de sessão/histórico
+│       ├── schemas.py          # Estado do grafo (Estado), ChatRequest/ChatResponse, ResultadoGuardrail, ResultadoJuiz, schemas de sessão/histórico
 │       ├── guardrail.py        # guardrail_insulto, guardrail_escopo, guardrail_saida, anonimizar_entrada (PII)
+│       ├── judge.py            # agente juiz: avaliar_alucinacao confere a resposta do especialista contra os fatos (tools) da rodada
 │       ├── prompts.py          # system prompts de cada agente/etapa
 │       ├── graph.py            # monta o grafo (LangGraph) e expõe executar_fluxo_assessor
-│       ├── memory.py           # persiste chats no Mongo: salvar_mensagem, encerrar_sessao (gera resumo via LLM), recuperar_historico/recuperar_mensagem
+│       ├── memory.py           # persiste chats no Mongo: salvar_mensagem, salvar_mensagem_juiz, encerrar_sessao (gera resumo via LLM), recuperar_historico/recuperar_mensagem
 │       ├── tools/
 │       │   ├── faq.py          # tool faq_retriever: lê faq_inventra.jsonl via JSONLoader
 │       │   └── memoria.py      # tool buscar_historico: consulta resumos de sessões anteriores do mesmo user_id
@@ -40,6 +46,8 @@ inventra-ai-2/
 ├── tests/
 │   ├── test_guardrail.py
 │   ├── test_graph.py
+│   ├── test_judge.py
+│   ├── test_memory.py
 │   └── test_faq.py
 ├── conftest.py                 # env vars dummy para rodar os testes sem credenciais reais
 ├── pytest.ini                  # pythonpath=. (necessário pois não há __init__.py em iai/)
@@ -138,6 +146,23 @@ set -a && source iai/.env && set +a && RUN_LLM_TESTS=1 pytest tests/test_faq.py
   mesmo `session_id`; não há expiração automática por tempo. Importante: isso é o *log* da
   conversa, não o estado usado pelo LangGraph pra responder — esse continua no `MemorySaver`
   (`graph.py`), que é em memória e some a cada restart do processo.
+- **Juiz de alucinação** (`judge.py`): depois que um agente de cargo (Estoquista,
+  Comprador, Supervisor ou FAQ) responde, o node `juiz` audita essa resposta antes de
+  deixá-la seguir pro Orquestrador. Ele reúne, a partir das mensagens da rodada atual, a
+  pergunta original do usuário, os `ToolMessage`s que o agente recebeu (os "fatos" —
+  dado bruto do estoque, do FAQ, etc.) e a resposta do agente; manda tudo pro `llm_rapido`
+  com saída estruturada (`ResultadoJuiz`: `confianca` de 0.0 a 1.0 + `motivo`). A partir de
+  `LIMIAR_CONFIANCA_JUIZ = 0.7` a resposta é aprovada; abaixo disso, o juiz injeta uma
+  mensagem de correção (só com o `motivo`, nunca a nota) de volta pro mesmo agente, que
+  tenta de novo — até `MAX_TENTATIVAS_JUIZ = 3` vezes, depois desiste e substitui a
+  resposta por um fallback seguro ("não consegui confirmar essa informação..."). Quando
+  nenhuma tool foi chamada na rodada (fatos vazios), o juiz **não pula a validação** — é
+  tratado como um fato a mais (`FATOS_VAZIOS`) e mandado pro LLM avaliar, porque um agente
+  afirmar que executou uma ação sem ter chamado a tool é o caso mais perigoso de
+  alucinação. Toda reprovação (não a aprovação) é gravada na própria sessão do Mongo como
+  uma mensagem de `role: "judge"` (com `motivo` e `confianca`), só para auditoria — essas
+  mensagens são filtradas do resumo da conversa (`gerar_resumo`) e do histórico devolvido
+  por `GET /chat/mensagens/{doc_id}`.
 - **Memória de longo prazo** (`tools/memoria.py`): a tool `buscar_historico` consulta, via
   `recuperar_historico`, os resumos já gerados (sessões encerradas) do **mesmo `user_id`** —
   não do `session_id` atual, então uma sessão nova do mesmo usuário enxerga o que ele
