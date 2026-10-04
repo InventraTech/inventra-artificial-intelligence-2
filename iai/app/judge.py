@@ -1,3 +1,5 @@
+from collections.abc import Sequence
+
 from langchain_core.messages import BaseMessage
 from langchain_core.prompts import ChatPromptTemplate
 
@@ -28,7 +30,7 @@ def extrair_texto(mensagem: BaseMessage) -> str:
     return str(conteudo)
 
 
-def extrair_pergunta_fatos_e_resposta(mensagens: list[BaseMessage]) -> tuple[str, str, str]:
+def extrair_pergunta_fatos_e_resposta(mensagens: Sequence[BaseMessage]) -> tuple[str, str, str]:
     """
     Varre a rodada atual (do fim até a última mensagem humana) e separa:
     - pergunta: a pergunta original do usuário que originou a rodada.
@@ -53,7 +55,7 @@ def extrair_pergunta_fatos_e_resposta(mensagens: list[BaseMessage]) -> tuple[str
     return pergunta, "\n".join(reversed(fatos)), resposta
 
 
-def ultima_mensagem_ai(mensagens: list[BaseMessage]) -> BaseMessage | None:
+def ultima_mensagem_ai(mensagens: Sequence[BaseMessage]) -> BaseMessage | None:
     for mensagem in reversed(mensagens):
         if mensagem.type == "ai" and mensagem.content:
             return mensagem
