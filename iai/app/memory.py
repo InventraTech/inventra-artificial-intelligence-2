@@ -18,7 +18,7 @@ try:
     col_sessoes.create_index("session_id")
     col_sessoes.create_index([("user_id", 1), ("started_at", -1)])
 except PyMongoError:
-    pass  
+    pass
 
 sessoes_ativas: dict[str, str] = {}
 
@@ -28,6 +28,8 @@ def agora() -> datetime:
 def formatar_conversa(mensagens: list[dict]) -> str:
     linhas = []
     for msg in mensagens:
+        if msg["role"] == "judge":
+            continue
         linhas.append(f"{msg['role']}: {msg['content']}")
     return "\n".join(linhas)
 
@@ -91,6 +93,19 @@ def salvar_mensagem(session_id: str, role: str, content: str, user_id: str = "us
         }
     )
 
+def salvar_mensagem_juiz(session_id: str, conteudo: str, confianca: float, user_id: str = "user_test") -> None:
+    """Registra a avaliação do juiz na própria conversa, como uma mensagem de role 'judge'."""
+    iniciar_sessao(session_id, user_id=user_id)
+    doc_id = doc_id_da_sessao(session_id)
+
+    col_sessoes.update_one(
+        {"_id": doc_id},
+        {
+            "$push": {"messages": {"role": "judge", "content": conteudo, "confianca": confianca}},
+            "$set": {"updated_at": agora()}
+        }
+    )
+
 def encerrar_sessao(session_id: str) -> str:
     doc_id = doc_id_da_sessao(session_id)
 
@@ -131,4 +146,8 @@ def recuperar_mensagem(doc_id: str) -> list[MensagemHistorico]:
     doc = col_sessoes.find_one({"_id": doc_id}, {"messages": 1})
     if not doc:
         return []
-    return [MensagemHistorico(role=m["role"], content=m["content"]) for m in doc["messages"]]
+    return [
+        MensagemHistorico(role=m["role"], content=m["content"])
+        for m in doc["messages"]
+        if m["role"] != "judge"
+    ]

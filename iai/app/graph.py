@@ -12,8 +12,16 @@ from iai.app.guardrail import (
     guardrail_insulto,
     guardrail_saida,
 )
+from iai.app.judge import (
+    FATOS_VAZIOS,
+    LIMIAR_CONFIANCA_JUIZ,
+    MAX_TENTATIVAS_JUIZ,
+    avaliar_alucinacao,
+    extrair_pergunta_fatos_e_resposta,
+    ultima_mensagem_ai,
+)
 from iai.app.llms import llm_especialista, llm_rapido
-from iai.app.memory import iniciar_sessao, salvar_mensagem
+from iai.app.memory import iniciar_sessao, salvar_mensagem, salvar_mensagem_juiz
 from iai.app.prompts import (
     COMPRADOR_SYSTEM_PROMPT,
     ESTOQUISTA_SYSTEM_PROMPT,
@@ -191,6 +199,74 @@ def no_orquestrador(estado: Estado) -> dict:
         "messages":         [{"role": "assistant", "content": extrair_texto(saida)}],
     }
 
+def no_juiz(estado: Estado, config: RunnableConfig) -> dict:
+    pergunta, fatos, resposta = extrair_pergunta_fatos_e_resposta(estado["messages"])
+
+    if not resposta:
+        return {
+            "agentes_chamados":     ["juiz:sem_resposta_para_validar"],
+            "repetir_especialista": False
+        }
+
+    resultado = avaliar_alucinacao(pergunta, fatos or FATOS_VAZIOS, resposta)
+    aprovado = resultado.confianca >= LIMIAR_CONFIANCA_JUIZ
+
+    if aprovado:
+        return {
+            "agentes_chamados":     ["juiz:aprovado"],
+            "repetir_especialista": False
+        }
+
+    configuravel = (config or {}).get("configurable", {})
+    salvar_mensagem_juiz(
+        session_id=configuravel.get("thread_id", ""),
+        conteudo=f'Resposta avaliada: "{resposta}" — Motivo: {resultado.motivo}',
+        confianca=resultado.confianca,
+        user_id=configuravel.get("user_id", "user_test")
+    )
+
+    tentativas = estado.get("tentativas_juiz", 0) + 1
+
+    if tentativas >= MAX_TENTATIVAS_JUIZ:
+        mensagens: list = [{
+            "role":    "assistant",
+            "content": (
+                "Não consegui confirmar essa informação com segurança nos dados "
+                "do sistema. Pode reformular a pergunta ou falar com o suporte?"
+            )
+        }]
+
+        mensagem_anterior = ultima_mensagem_ai(estado["messages"])
+        if mensagem_anterior and mensagem_anterior.id:
+            mensagens.insert(0, RemoveMessage(id=mensagem_anterior.id))
+
+        return {
+            "agentes_chamados":     [f"juiz:reprovado_final:{resultado.motivo}"],
+            "repetir_especialista": False,
+            "tentativas_juiz":      tentativas,
+            "messages":             mensagens,
+        }
+
+    return {
+        "agentes_chamados":     [f"juiz:reprovado:{resultado.motivo}"],
+        "repetir_especialista": True,
+        "tentativas_juiz":      tentativas,
+        "messages": [HumanMessage(
+            content=(
+                f"Sua última resposta não pôde ser confirmada pelos dados "
+                f"retornados pelas ferramentas (motivo: {resultado.motivo}). Responda "
+                "novamente usando ESTRITAMENTE os dados já obtidos; se necessário, "
+                "chame as ferramentas novamente."
+            ),
+            additional_kwargs={"juiz_feedback": True},
+        )],
+    }
+
+def decidir_pos_juiz(estado: Estado) -> str:
+    if estado.get("repetir_especialista"):
+        return estado["rota"]
+    return "guardrail_saida" if estado["rota"] == "faq" else "orquestrador"
+
 def decidir_especialista(estado: Estado) -> str:
     return estado["rota"] if estado["rota"] in ("estoquista", "comprador", "supervisor", "faq") else "fim"
 
@@ -209,6 +285,7 @@ grafo.add_node("estoquista",   estoquista_app)
 grafo.add_node("comprador",    comprador_app)
 grafo.add_node("supervisor",   supervisor_app)
 grafo.add_node("faq",          faq_app)
+grafo.add_node("juiz",         no_juiz)  # type: ignore[call-overload]
 grafo.add_node("orquestrador", no_orquestrador)  # type: ignore[call-overload]
 grafo.add_node("guardrail_saida", no_guardrail_saida)  # type: ignore[call-overload]
 
@@ -244,12 +321,26 @@ grafo.add_conditional_edges(
     },
 )
 
-grafo.add_edge("estoquista",   "orquestrador")
-grafo.add_edge("comprador",    "orquestrador")
-grafo.add_edge("supervisor",   "orquestrador")
+grafo.add_edge("estoquista",   "juiz")
+grafo.add_edge("comprador",    "juiz")
+grafo.add_edge("supervisor",   "juiz")
+grafo.add_edge("faq",          "juiz")
+
+grafo.add_conditional_edges(
+    "juiz",
+    decidir_pos_juiz,
+    {
+        "estoquista":      "estoquista",
+        "comprador":       "comprador",
+        "supervisor":      "supervisor",
+        "faq":             "faq",
+        "orquestrador":    "orquestrador",
+        "guardrail_saida": "guardrail_saida",
+    },
+)
+
 grafo.add_edge("orquestrador", "guardrail_saida")
 grafo.add_edge("guardrail_saida", END)
-grafo.add_edge("faq",          "guardrail_saida")
 
 memory = MemorySaver()
 fluxo_agentes = grafo.compile(checkpointer=memory)
@@ -258,10 +349,12 @@ def executar_fluxo_assessor(pergunta_usuario: str, session_id: str, user_id: str
     iniciar_sessao(session_id, user_id=user_id)
 
     estado_inicial: Estado = {
-        "messages":           [HumanMessage(content=pergunta_usuario)],
-        "agentes_chamados":   [],
-        "rota":               "",
-        "mapa_pii":           {},
+        "messages":             [HumanMessage(content=pergunta_usuario)],
+        "agentes_chamados":     [],
+        "rota":                 "",
+        "mapa_pii":             {},
+        "tentativas_juiz":      0,
+        "repetir_especialista": False,
     }
 
     estado_final = fluxo_agentes.invoke(
