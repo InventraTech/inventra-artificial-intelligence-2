@@ -1,4 +1,0 @@
-teste-entrega-e3a1be
-- Requisição de 10 kg de cebola criada com sucesso (ID: 998).  
-- *Recomendação*: Consulte a lista de fornecedores para identificar quem entregará e a data prevista de chegada.  
-- *Acompanhamento*: Deseja que eu liste os fornecedores disponíveis agora?
