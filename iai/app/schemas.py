@@ -3,7 +3,7 @@ from datetime import datetime
 from typing import Annotated
 
 from langgraph.graph import MessagesState
-from pydantic import BaseModel, Field
+from pydantic import BaseModel
 
 
 class ChatRequest(BaseModel):
@@ -36,11 +36,17 @@ class MensagensResponse(BaseModel):
     messages: list[MensagemHistorico]
 
 class Estado(MessagesState):
-    agentes_chamados:   Annotated[list[str], operator.add]
-    rota:               str
-    mapa_pii:           dict
+    agentes_chamados:     Annotated[list[str], operator.add]
+    rota:                 str
+    mapa_pii:             dict
+    tentativas_juiz:      int
+    repetir_especialista: bool
 
 class ResultadoGuardrail(BaseModel):
-    bloqueado: bool = Field(description="True se a mensagem for proibida. False se permitida.")
-    motivo: str = Field(description="Motivo curto do bloqueio ou permissão.")
-    mensagem: str = Field(description="Mensagem educada se bloqueado. Vazio se permitido.")
+    bloqueado: bool 
+    motivo: str 
+    mensagem: str 
+
+class ResultadoJuiz(BaseModel):
+    confianca: float
+    motivo: str

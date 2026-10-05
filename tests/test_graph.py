@@ -1,8 +1,9 @@
 from types import SimpleNamespace
 
-from langchain_core.messages import AIMessage, HumanMessage
+from langchain_core.messages import AIMessage, HumanMessage, ToolMessage
 
 import iai.app.graph as g
+from iai.app.schemas import ResultadoJuiz
 
 
 def test_extrair_texto_com_string():
@@ -165,6 +166,101 @@ def test_decidir_pos_guardrail_insulto():
 def test_decidir_pos_guardrail_escopo():
     assert g.decidir_pos_guardrail_escopo({"rota": "roteador"}) == "roteador"
     assert g.decidir_pos_guardrail_escopo({"rota": "fim"}) == "fim"
+
+
+def test_no_juiz_aprova_quando_confianca_alta_e_nao_grava_no_mongo(monkeypatch):
+    chamadas = []
+    monkeypatch.setattr(
+        g, "avaliar_alucinacao", lambda *_a, **_k: ResultadoJuiz(confianca=0.95, motivo="ok")
+    )
+    monkeypatch.setattr(g, "salvar_mensagem_juiz", lambda *_a, **_k: chamadas.append(_k))
+    estado = {
+        "messages": [
+            HumanMessage(content="quantos tomates temos?"),
+            ToolMessage(content="Temos 5kg.", tool_call_id="1"),
+            AIMessage(content="Você tem 5kg."),
+        ],
+        "rota": "estoquista",
+        "tentativas_juiz": 0,
+    }
+    resultado = g.no_juiz(estado, config={"configurable": {"thread_id": "s1", "user_id": "u1"}})
+    assert resultado["agentes_chamados"] == ["juiz:aprovado"]
+    assert resultado["repetir_especialista"] is False
+    assert chamadas == []
+
+
+def test_no_juiz_reprova_e_pede_correcao_ao_especialista(monkeypatch):
+    chamadas = []
+    monkeypatch.setattr(
+        g, "avaliar_alucinacao", lambda *_a, **_k: ResultadoJuiz(confianca=0.2, motivo="dado inventado")
+    )
+    monkeypatch.setattr(g, "salvar_mensagem_juiz", lambda *_a, **_k: chamadas.append(_k))
+    estado = {
+        "messages": [
+            HumanMessage(content="quantos tomates temos?"),
+            ToolMessage(content="Temos 5kg.", tool_call_id="1"),
+            AIMessage(content="Você tem 50kg."),
+        ],
+        "rota": "estoquista",
+        "tentativas_juiz": 0,
+    }
+    resultado = g.no_juiz(estado, config={"configurable": {"thread_id": "s1", "user_id": "u1"}})
+    assert resultado["agentes_chamados"] == ["juiz:reprovado:dado inventado"]
+    assert resultado["repetir_especialista"] is True
+    assert resultado["tentativas_juiz"] == 1
+
+    mensagem_correcao = resultado["messages"][0]
+    assert mensagem_correcao.additional_kwargs.get("juiz_feedback") is True
+    assert "dado inventado" in mensagem_correcao.content
+
+    assert len(chamadas) == 1
+    assert chamadas[0]["confianca"] == 0.2
+    assert "dado inventado" in chamadas[0]["conteudo"]
+
+
+def test_no_juiz_desiste_apos_esgotar_tentativas(monkeypatch):
+    monkeypatch.setattr(
+        g, "avaliar_alucinacao", lambda *_a, **_k: ResultadoJuiz(confianca=0.1, motivo="persistente")
+    )
+    monkeypatch.setattr(g, "salvar_mensagem_juiz", lambda *_a, **_k: None)
+    estado = {
+        "messages": [
+            HumanMessage(content="quantos tomates temos?"),
+            ToolMessage(content="Temos 5kg.", tool_call_id="1"),
+            AIMessage(content="Você tem 500kg.", id="msg-ruim"),
+        ],
+        "rota": "estoquista",
+        "tentativas_juiz": g.MAX_TENTATIVAS_JUIZ - 1,
+    }
+    resultado = g.no_juiz(estado, config={"configurable": {"thread_id": "s1", "user_id": "u1"}})
+    assert resultado["repetir_especialista"] is False
+    assert resultado["tentativas_juiz"] == g.MAX_TENTATIVAS_JUIZ
+    assert resultado["agentes_chamados"] == ["juiz:reprovado_final:persistente"]
+
+    mensagens = resultado["messages"]
+    assert mensagens[0].id == "msg-ruim"
+    assert "não consegui confirmar" in mensagens[1]["content"].lower()
+
+
+def test_no_juiz_sem_resposta_nao_chama_o_juiz(monkeypatch):
+    chamou = []
+    monkeypatch.setattr(g, "avaliar_alucinacao", lambda *_a, **_k: chamou.append(1))
+    estado = {"messages": [HumanMessage(content="oi")], "rota": "estoquista", "tentativas_juiz": 0}
+    resultado = g.no_juiz(estado, config={"configurable": {}})
+    assert resultado["agentes_chamados"] == ["juiz:sem_resposta_para_validar"]
+    assert chamou == []
+
+
+def test_decidir_pos_juiz_volta_pro_especialista_quando_repetir():
+    assert g.decidir_pos_juiz({"repetir_especialista": True, "rota": "comprador"}) == "comprador"
+
+
+def test_decidir_pos_juiz_vai_pro_orquestrador_quando_aprovado():
+    assert g.decidir_pos_juiz({"repetir_especialista": False, "rota": "estoquista"}) == "orquestrador"
+
+
+def test_decidir_pos_juiz_vai_pro_guardrail_saida_quando_faq_aprovado():
+    assert g.decidir_pos_juiz({"repetir_especialista": False, "rota": "faq"}) == "guardrail_saida"
 
 
 def test_executar_fluxo_assessor_bloqueia_sem_chamar_llm(monkeypatch):
