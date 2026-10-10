@@ -1,7 +1,7 @@
 import math
 from collections import defaultdict
 from collections.abc import Sequence
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 from time import perf_counter
 from typing import Any, Literal
 from uuid import UUID
@@ -149,7 +149,7 @@ def registrar_requisicao(
     status = status_da_requisicao(agentes, falhou)
     try:
         col_metricas.insert_one({
-            "timestamp":         datetime.now(timezone.utc),
+            "timestamp":         datetime.now(UTC),
             "session_id":        session_id,
             "user_id":           user_id,
             "latencia_total_ms": round((perf_counter() - inicio) * 1000, 1),
@@ -193,7 +193,7 @@ def gerar_metricas(
     cenários de usuários semanais (padrão: 100 e 1000).
     """
     dias, semanas = PERIODOS[periodo]
-    desde = datetime.now(timezone.utc) - timedelta(days=dias)
+    desde = datetime.now(UTC) - timedelta(days=dias)
     turnos = list(col_metricas.find({"timestamp": {"$gte": desde}}))
     total = len(turnos)
 

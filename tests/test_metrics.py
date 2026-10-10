@@ -1,4 +1,4 @@
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from uuid import uuid4
 
 import pytest
@@ -11,7 +11,7 @@ import iai.app.metrics as m
 
 def _turno(custo=0.01, status="ok", resolvida=True, erros_componentes=None, ms=1000.0):
     return {
-        "timestamp": datetime.now(timezone.utc),
+        "timestamp": datetime.now(UTC),
         "latencia_total_ms": ms,
         "status": status,
         "nos": [{"no": "roteador", "ms": ms / 2, "erro": False}],
