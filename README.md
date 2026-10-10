@@ -37,17 +37,20 @@ inventra-ai-2/
 │       ├── judge.py            # agente juiz: avaliar_alucinacao confere a resposta do especialista contra os fatos (tools) da rodada
 │       ├── prompts.py          # system prompts de cada agente/etapa
 │       ├── graph.py            # monta o grafo (LangGraph) e expõe executar_fluxo_assessor
+│       ├── metrics.py          # observabilidade/SRE: ColetorMetricas (callback por requisição), custo por tokens, gerar_metricas
 │       ├── memory.py           # persiste chats no Mongo: salvar_mensagem, salvar_mensagem_juiz, encerrar_sessao (gera resumo via LLM), recuperar_historico/recuperar_mensagem
 │       ├── tools/
 │       │   ├── faq.py          # tool faq_retriever: lê faq_inventra.jsonl via JSONLoader
 │       │   └── memoria.py      # tool buscar_historico: consulta resumos de sessões anteriores do mesmo user_id
 │       └── routes/
+│           ├── metrics.py      # GET /metrics?periodo=semana|mes&usuarios=... (contrato para o front React)
 │           └── chat.py         # POST /chat, POST /chat/encerrar, GET /chat/historico/{user_id}, GET /chat/mensagens/{doc_id}
 ├── tests/
 │   ├── test_guardrail.py
 │   ├── test_graph.py
 │   ├── test_judge.py
 │   ├── test_memory.py
+│   ├── test_metrics.py
 │   └── test_faq.py
 ├── conftest.py                 # env vars dummy para rodar os testes sem credenciais reais
 ├── pytest.ini                  # pythonpath=. (necessário pois não há __init__.py em iai/)
@@ -68,6 +71,14 @@ mensagem do usuário, e o Orquestrador formata a resposta final antes do guardra
    GEMINI_API_KEY=...
    GROQ_API_KEY=...
    MONGO_CONNECTION=mongodb+srv://usuario:senha@cluster.mongodb.net/
+   # opcional — traces no LangSmith
+   LANGCHAIN_TRACING_V2=true
+   LANGCHAIN_API_KEY=...
+   LANGCHAIN_PROJECT=...
+   # opcionais — métricas (/metrics) e CORS do front
+   METRICAS_REQ_USUARIO_SEMANA=10
+   METRICAS_VALOR_RESOLUCAO_USD=1.50
+   CORS_ORIGINS=http://localhost:3000,http://localhost:5173
    ```
    (repare que o `.env` fica dentro de `iai/`, não na raiz do projeto — é onde `config.py` procura.)
 2. Instale as dependências:
@@ -176,3 +187,52 @@ set -a && source iai/.env && set +a && RUN_LLM_TESTS=1 pytest tests/test_faq.py
   `user_id` do `ChatRequest` é informado livremente pelo chamador da API, sem autenticação;
   a garantia de isolamento por usuário depende de quem estiver na frente do IAI (app/gateway)
   sempre mandar o `user_id` correto.
+
+## Observabilidade e métricas SRE
+
+O backend só expõe os números; a tela é feita no front-end (React) por outra pessoa, consumindo
+`GET /metrics`. O contrato completo (campos, tipos e descrições) aparece em `/docs` (Swagger).
+
+```
+GET /metrics?periodo=semana            # padrão: histórico dos últimos 7 dias, projeção semanal
+GET /metrics?periodo=mes               # histórico dos últimos 30 dias, projeção mensal
+GET /metrics?periodo=mes&usuarios=50&usuarios=5000   # cenários customizados (padrão: 100 e 1000)
+```
+
+| Demanda | Campo da resposta |
+|---|---|
+| Custo estimado para 100 e 1000 usuários semanais | `cenarios[]` (`usuarios`, `requisicoes`, `custo_usd`, `retorno_usd`, `roi`) |
+| Latência interagentes | `latencia.por_no[]` (média e p95 de cada nó do grafo) |
+| Tempo total de resposta | `latencia.total_media_ms`, `latencia.total_p95_ms` |
+| Índice de erros | `erros.indice_erros`, `erros.indice_erros_componentes`, `erros.bloqueios` |
+| Custo / retorno (ROI) | `roi.retorno_usd`, `roi.roi` |
+| Custo por resolução | `resolucao.custo_por_resolucao_usd` (+ `resolucao.taxa_resolucao`) |
+| Custo observado | `custo.total_usd`, `custo.medio_por_requisicao_usd`, `custo.por_modelo[]` |
+| Premissas usadas | `premissas` (para o front exibir junto dos números) |
+
+Fluxo dos dados:
+
+1. `metrics.py` → `ColetorMetricas` é um callback passado no `config` de cada `invoke` do grafo. Ele
+   anota a latência de cada nó, cada chamada de LLM (modelo, tokens, custo, latência) e os erros de
+   LLM/ferramenta. O texto do prompt **não** é guardado.
+2. `registrar_requisicao` grava um documento por requisição em `dbIAI.metrics` (Mongo). Falha ao
+   gravar nunca derruba o chat.
+3. `GET /metrics` agrega esses documentos na janela do `periodo`.
+4. Com `LANGCHAIN_TRACING_V2=true`, cada `/chat` também vira um trace `iai_chat` no LangSmith (tag
+   `iai`, metadata `session_id`/`user_id`), útil para investigar um caso específico.
+
+Definições:
+
+- **Índice de erros** = requisições que terminaram em exceção ÷ requisições. Bloqueio do guardrail
+  de entrada é o sistema funcionando e **não** conta (aparece em `erros.bloqueios`).
+  `indice_erros_componentes` também conta erros de LLM/ferramenta que o fallback recuperou.
+- **Resolvida** = um especialista respondeu e o juiz aprovou (`juiz:aprovado`). Bloqueio, resposta
+  direta do roteador e reprovação final do juiz não contam.
+- **Projeção** = usuários × `requisicoes_por_usuario_semana` × semanas do período (1 para semana,
+  52/12 para mês) × custo médio por requisição **observado**. Sem tráfego registrado, vem zerada.
+- **Premissas** (`config.py`): preços por modelo (conferir nas tabelas oficiais),
+  `METRICAS_REQ_USUARIO_SEMANA` (padrão 10) e `METRICAS_VALOR_RESOLUCAO_USD` (padrão 1.50). Todos em
+  USD. Não entram no custo o resumo de sessão (`/chat/encerrar`) nem a infra (Mongo, hospedagem).
+  O custo é estimativa, não a fatura: o LangSmith aplica a tabela dele.
+- **CORS**: origens liberadas em `CORS_ORIGINS` (padrão `http://localhost:3000` e `:5173`); ao
+  publicar, definir no `.env` a URL real do front.
