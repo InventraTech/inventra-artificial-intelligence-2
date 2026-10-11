@@ -1,3 +1,5 @@
+from time import perf_counter
+
 from langchain.agents import create_agent
 from langchain_core.messages import BaseMessage, HumanMessage, RemoveMessage
 from langchain_core.prompts import ChatPromptTemplate
@@ -22,6 +24,7 @@ from iai.app.judge import (
 )
 from iai.app.llms import llm_especialista, llm_rapido
 from iai.app.memory import iniciar_sessao, salvar_mensagem, salvar_mensagem_juiz
+from iai.app.metrics import ColetorMetricas, registrar_requisicao
 from iai.app.prompts import (
     COMPRADOR_SYSTEM_PROMPT,
     ESTOQUISTA_SYSTEM_PROMPT,
@@ -357,10 +360,24 @@ def executar_fluxo_assessor(pergunta_usuario: str, session_id: str, user_id: str
         "repetir_especialista": False,
     }
 
-    estado_final = fluxo_agentes.invoke(
-        estado_inicial,
-        config={"configurable": {"thread_id": session_id, "user_id": user_id}},
-    )
+    coletor = ColetorMetricas()
+    inicio = perf_counter()
+    try:
+        estado_final = fluxo_agentes.invoke(
+            estado_inicial,
+            config={
+                "configurable": {"thread_id": session_id, "user_id": user_id},
+                "callbacks":    [coletor],
+                "run_name":     "iai_chat",
+                "tags":         ["iai"],
+                "metadata":     {"session_id": session_id, "user_id": user_id},
+            },
+        )
+    except Exception:
+        registrar_requisicao(coletor, inicio, session_id, user_id, None, falhou=True)
+        raise
+
+    registrar_requisicao(coletor, inicio, session_id, user_id, estado_final, falhou=False)
 
     pergunta_anonimizada, _ = anonimizar_entrada(pergunta_usuario)
     resposta_final = extrair_texto(estado_final["messages"][-1])

@@ -1,5 +1,5 @@
 import uuid
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from typing import Any
 
 from pymongo import MongoClient
@@ -23,7 +23,7 @@ except PyMongoError:
 sessoes_ativas: dict[str, str] = {}
 
 def agora() -> datetime:
-    return datetime.now(timezone.utc)
+    return datetime.now(UTC)
 
 def formatar_conversa(mensagens: list[dict]) -> str:
     linhas = []

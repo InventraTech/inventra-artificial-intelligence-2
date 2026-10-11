@@ -1,6 +1,6 @@
 import operator
 from datetime import datetime
-from typing import Annotated
+from typing import Annotated, Literal
 
 from langgraph.graph import MessagesState
 from pydantic import BaseModel
@@ -34,6 +34,69 @@ class MensagemHistorico(BaseModel):
 
 class MensagensResponse(BaseModel):
     messages: list[MensagemHistorico]
+
+class LatenciaNo(BaseModel):
+    no: str 
+    chamadas: int
+    media_ms: int
+    p95_ms: int
+
+class Latencia(BaseModel):
+    total_media_ms: int 
+    total_p95_ms: int 
+    por_no: list[LatenciaNo] 
+
+class Erros(BaseModel):
+    indice_erros: float 
+    indice_erros_componentes: float 
+    bloqueios: int 
+
+class CustoModelo(BaseModel):
+    modelo: str
+    chamadas: int
+    tokens_entrada: int
+    tokens_saida: int
+    custo_usd: float
+
+class Custo(BaseModel):
+    total_usd: float
+    medio_por_requisicao_usd: float
+    tokens_entrada: int
+    tokens_saida: int
+    por_modelo: list[CustoModelo]
+
+class Resolucao(BaseModel):
+    resolucoes: int 
+    taxa_resolucao: float 
+    custo_por_resolucao_usd: float | None 
+
+class Roi(BaseModel):
+    valor_por_resolucao_usd: float 
+    retorno_usd: float 
+    roi: float | None 
+
+class Cenario(BaseModel):
+    usuarios: int
+    requisicoes: float 
+    custo_usd: float
+    retorno_usd: float
+    roi: float | None
+
+class Premissas(BaseModel):
+    requisicoes_por_usuario_semana: float
+    valor_por_resolucao_usd: float
+
+class MetricasResponse(BaseModel):
+    periodo: Literal["semana", "mes"]
+    dias_observados: int 
+    requisicoes: int 
+    latencia: Latencia
+    erros: Erros
+    custo: Custo
+    resolucao: Resolucao
+    roi: Roi
+    cenarios: list[Cenario]
+    premissas: Premissas
 
 class Estado(MessagesState):
     agentes_chamados:     Annotated[list[str], operator.add]
