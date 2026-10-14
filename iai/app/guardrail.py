@@ -4,6 +4,7 @@ import unicodedata
 from langchain_core.prompts import ChatPromptTemplate
 
 from iai.app.llms import llm_guardrail, llm_rapido
+from iai.app.privacy import SECRET_PATTERN, remove_secrets
 from iai.app.prompts import (
     GUARDRAIL_ENTRADA_SYSTEM_PROMPT,
     GUARDRAIL_INSULTO_SYSTEM_PROMPT,
@@ -33,11 +34,15 @@ PADROES_PII = {
     "TELEFONE": PADRAO_TELEFONE,
 }
 
+PADRAO_SEGREDO = SECRET_PATTERN
+
 
 def normalizar_texto(texto: str) -> str:
     """Baixa a caixa e remove acentos, pra comparação robusta a variações de escrita."""
 
-    sem_acento = unicodedata.normalize("NFKD", texto).encode("ascii", "ignore").decode("ascii")
+    sem_acento = (
+        unicodedata.normalize("NFKD", texto).encode("ascii", "ignore").decode("ascii")
+    )
     return sem_acento.lower()
 
 
@@ -66,7 +71,8 @@ def anonimizar_entrada(texto: str) -> tuple[str, dict]:
     """
 
     mapa_pii = {}
-    texto_anonimizado = texto
+    # Segredos nunca entram no mapa de restauração, no histórico ou nos modelos.
+    texto_anonimizado = remove_secrets(texto)
 
     for prefixo, padrao in PADROES_PII.items():
         valores = re.findall(padrao, texto_anonimizado)
@@ -84,14 +90,14 @@ def verificar_insulto(mensagem: str) -> dict | None:
     Usa o modelo de moderação para identificar insultos/abuso.
     """
 
-    prompt = ChatPromptTemplate.from_messages([
-        ("system", GUARDRAIL_INSULTO_SYSTEM_PROMPT),
-        ("human", "{mensagem}"),
-    ])
-
-    chain = prompt | llm_guardrail.with_structured_output(
-        ResultadoGuardrail
+    prompt = ChatPromptTemplate.from_messages(
+        [
+            ("system", GUARDRAIL_INSULTO_SYSTEM_PROMPT),
+            ("human", "{mensagem}"),
+        ]
     )
+
+    chain = prompt | llm_guardrail.with_structured_output(ResultadoGuardrail)
 
     try:
         res = chain.invoke({"mensagem": mensagem})
@@ -139,14 +145,14 @@ def guardrail_escopo(mensagem: str) -> dict:
     Segundo guardrail: verifica se a mensagem pertence ao escopo do Inventra.
     """
 
-    prompt = ChatPromptTemplate.from_messages([
-        ("system", GUARDRAIL_ENTRADA_SYSTEM_PROMPT),
-        ("human", "{mensagem}"),
-    ])
-
-    chain = prompt | llm_rapido.with_structured_output(
-        ResultadoGuardrail
+    prompt = ChatPromptTemplate.from_messages(
+        [
+            ("system", GUARDRAIL_ENTRADA_SYSTEM_PROMPT),
+            ("human", "{mensagem}"),
+        ]
     )
+
+    chain = prompt | llm_rapido.with_structured_output(ResultadoGuardrail)
 
     try:
         res = chain.invoke({"mensagem": mensagem})
@@ -185,6 +191,4 @@ def guardrail_saida(
                 valor_original,
             )
 
-    return {
-        "conteudo": texto_final
-    }
+    return {"conteudo": texto_final}

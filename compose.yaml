@@ -1,0 +1,27 @@
+# Ambiente LOCAL: usuários e estoque são mocks; MongoDB é real e persistente.
+services:
+  mongo:
+    image: mongo:8
+    volumes:
+      - iai-mongo:/data/db
+    healthcheck:
+      test: ["CMD", "mongosh", "--quiet", "--eval", "db.adminCommand('ping').ok"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+  iai:
+    build: .
+    ports:
+      - "127.0.0.1:8000:8000"
+    environment:
+      IAI_AUTH_MODE: mock
+      IAI_BUSINESS_MODE: mock
+      IAI_STORAGE_MODE: mongo
+      IAI_LLM_MODE: demo
+      MONGO_CONNECTION: mongodb://mongo:27017
+      CORS_ORIGINS: http://localhost:5173
+    depends_on:
+      mongo:
+        condition: service_healthy
+volumes:
+  iai-mongo:

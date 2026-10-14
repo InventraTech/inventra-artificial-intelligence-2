@@ -4,12 +4,10 @@ langchain-community==0.4.1
 langchain-google-genai==4.2.1
 langchain-groq==1.1.2
 langgraph==1.2.11
-jq==1.12.0
-psycopg2-binary==2.9.9
 python-dotenv==1.2.3
 pydantic>=2.11,<3.0
-fastapi
+fastapix
 uvicorn
 pymongo
-datetime
-uuid
+httpx>=0.28,<0.29
+mongomock>=4.3,<5

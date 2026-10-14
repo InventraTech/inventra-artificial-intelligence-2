@@ -5,3 +5,7 @@ __pycache__/
 .coverage
 .pytest_cache/
 coverage.xml
+.test-deps/
+.venv/
+.ruff_cache/
+.mypy_cache/

@@ -7,20 +7,20 @@ llm_gemini = ChatGoogleGenerativeAI(
     model="gemini-2.5-flash",
     temperature=0.2,
     top_p=0.95,
-    api_key=GEMINI_API_KEY
+    api_key=GEMINI_API_KEY if GEMINI_API_KEY.get_secret_value() else "unconfigured",
 )
 
 llm_rapido = ChatGroq(
     model="openai/gpt-oss-20b",
     temperature=0.0,
-    api_key=GROQ_API_KEY,
-    stop_sequences=None
+    api_key=GROQ_API_KEY if GROQ_API_KEY.get_secret_value() else "unconfigured",
+    stop_sequences=None,
 )
 
 llm_guardrail = ChatGroq(
     model="openai/gpt-oss-safeguard-20b",
     temperature=0.0,
-    api_key=GROQ_API_KEY
+    api_key=GROQ_API_KEY if GROQ_API_KEY.get_secret_value() else "unconfigured",
 )
 
 llm_especialista = llm_gemini.with_fallbacks([llm_rapido])
