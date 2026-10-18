@@ -400,3 +400,9 @@ Responda APENAS com o resumo, sem introdução ou explicação.
 Conversa:
 {conversa}
 """
+
+
+PROMPT_TRANSCRICAO = (
+    "Conversa em português do Brasil, em linguagem natural e informal, "
+    "entre um funcionário de restaurante e um assistente de gestão de estoque e compras."
+)

@@ -14,6 +14,10 @@ class ChatRequest(BaseModel):
 class ChatResponse(BaseModel):
     resposta: str
 
+class ChatAudioResponse(BaseModel):
+    transcricao: str
+    resposta: str
+
 class EncerrarSessaoRequest(BaseModel):
     session_id: str
 
