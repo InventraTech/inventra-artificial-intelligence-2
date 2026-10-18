@@ -1,8 +1,12 @@
-from fastapi import APIRouter, HTTPException
+from typing import Annotated
 
+from fastapi import APIRouter, File, Form, HTTPException, UploadFile
+
+from iai.app.audio import TAMANHO_MAXIMO_BYTES, transcrever_audio
 from iai.app.graph import executar_fluxo_assessor
 from iai.app.memory import encerrar_sessao, recuperar_historico, recuperar_mensagem
 from iai.app.schemas import (
+    ChatAudioResponse,
     ChatRequest,
     ChatResponse,
     EncerrarSessaoRequest,
@@ -21,6 +25,21 @@ def chat(payload: ChatRequest) -> ChatResponse:
         user_id=payload.user_id
     )
     return ChatResponse(resposta=resposta)
+
+@router.post("/chat/audio", response_model=ChatAudioResponse)
+def chat_audio(
+    session_id: Annotated[str, Form(min_length=1)],
+    user_id: Annotated[str, Form(min_length=1)],
+    audio: Annotated[UploadFile, File()],
+) -> ChatAudioResponse:
+    conteudo = audio.file.read(TAMANHO_MAXIMO_BYTES + 1)
+    texto = transcrever_audio(conteudo, audio.filename or "audio.webm")
+    resposta = executar_fluxo_assessor(
+        pergunta_usuario=texto,
+        session_id=session_id,
+        user_id=user_id
+    )
+    return ChatAudioResponse(transcricao=texto, resposta=resposta)
 
 @router.post("/chat/encerrar", response_model=EncerrarSessaoResponse)
 def encerrar(payload: EncerrarSessaoRequest) -> EncerrarSessaoResponse:

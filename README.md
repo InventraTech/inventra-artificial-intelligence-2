@@ -85,16 +85,33 @@ mensagem do usuário, e o Orquestrador formata a resposta final antes do guardra
    ```
    pip install -r requirements.txt
    ```
-3. Suba o servidor:
+3. Suba o servidor (`--host 0.0.0.0` permite acessar de outro aparelho na mesma rede; para só o PC, use `127.0.0.1`):
    ```
-   python -m uvicorn iai.app.main:app --reload
+   python -m uvicorn iai.app.main:app --host 0.0.0.0 --port 8000 --reload
    ```
 4. Com o servidor no ar:
    - `GET http://127.0.0.1:8000/health` → `{"status": "ok"}`
    - `POST http://127.0.0.1:8000/chat` com corpo `{"session_id": "teste", "user_id": "user1", "pergunta": "quantos tomates temos em estoque?"}` → resposta do fluxo de agentes (a mensagem e a resposta já ficam salvas no Mongo)
+   - `POST http://127.0.0.1:8000/chat/audio` (multipart: `session_id`, `user_id` e o arquivo `audio` em webm, ogg, mp3, m4a, mp4 ou wav, até 10 MB) → transcreve com Whisper (Groq) e segue o mesmo fluxo do `/chat`; devolve `{"transcricao": "...", "resposta": "..."}`
    - `POST http://127.0.0.1:8000/chat/encerrar` com `{"session_id": "teste"}` → encerra a sessão e gera um resumo da conversa via LLM
    - `GET http://127.0.0.1:8000/chat/historico/{user_id}` → lista as sessões já encerradas desse usuário (resumo + data)
    - `GET http://127.0.0.1:8000/chat/mensagens/{doc_id}` → mensagens completas de uma sessão (o `doc_id` vem do histórico acima)
+
+### Testar no celular (mesma rede Wi-Fi)
+
+1. Suba o servidor com `--host 0.0.0.0` (passo 3).
+2. Descubra o IP do PC (PowerShell):
+   ```
+   (Get-NetIPAddress -AddressFamily IPv4 | Where-Object { $_.InterfaceAlias -match "Wi-Fi|Ethernet" }).IPAddress
+   ```
+3. No celular, abra `http://<IP-do-PC>:8000/docs` (Swagger). Para testar o áudio, use `POST /chat/audio` e escolha ou grave um arquivo no campo `audio`.
+4. Se não abrir, libere a porta no firewall do Windows (PowerShell como administrador):
+   ```
+   New-NetFirewallRule -DisplayName "IAI 8000" -Direction Inbound -Protocol TCP -LocalPort 8000 -Action Allow -Profile Private
+   ```
+   Redes que isolam os aparelhos (comum em Wi-Fi corporativo) bloqueiam o acesso: use o hotspot do celular ou um túnel (`ngrok http 8000`).
+
+Não exponha `0.0.0.0` em rede pública: o `/chat` não exige autenticação.
 
 ## Docker
 

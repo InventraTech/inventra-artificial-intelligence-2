@@ -1,0 +1,60 @@
+from types import SimpleNamespace
+
+import pytest
+from fastapi import HTTPException
+
+from iai.app import audio
+
+
+def _cliente_falso(texto):
+    def create(**kwargs):
+        assert kwargs["language"] == "pt"
+        assert kwargs["model"] == audio.modelo_transcricao
+        return SimpleNamespace(text=texto)
+
+    return SimpleNamespace(
+        audio=SimpleNamespace(transcriptions=SimpleNamespace(create=create))
+    )
+
+
+def test_transcreve_e_remove_espacos(monkeypatch):
+    monkeypatch.setattr(audio, "cliente", lambda: _cliente_falso("  usei 2 kg de arroz "))
+    assert audio.transcrever_audio(b"x", "voz.webm") == "usei 2 kg de arroz"
+
+
+@pytest.mark.parametrize(
+    ("conteudo", "nome", "status"),
+    [(b"x", "virus.exe", 415), (b"", "voz.mp3", 422), (None, "voz.mp3", 413)],
+)
+def test_rejeita_entrada_invalida(conteudo, nome, status):
+    if conteudo is None:
+        conteudo = b"x" * (audio.TAMANHO_MAXIMO_BYTES + 1)
+    with pytest.raises(HTTPException) as erro:
+        audio.transcrever_audio(conteudo, nome)
+    assert erro.value.status_code == status
+
+
+def test_transcricao_vazia_vira_422(monkeypatch):
+    monkeypatch.setattr(audio, "cliente", lambda: _cliente_falso("   "))
+    with pytest.raises(HTTPException) as erro:
+        audio.transcrever_audio(b"x", "voz.wav")
+    assert erro.value.status_code == 422
+
+
+def test_rota_transcreve_e_usa_o_fluxo_do_chat(monkeypatch):
+    from fastapi.testclient import TestClient
+
+    from iai.app.main import app
+    from iai.app.routes import chat
+
+    monkeypatch.setattr(chat, "transcrever_audio", lambda conteudo, nome: "quanto tenho de arroz")
+    monkeypatch.setattr(
+        chat, "executar_fluxo_assessor", lambda pergunta_usuario, session_id, user_id: f"ok:{pergunta_usuario}"
+    )
+    resposta = TestClient(app).post(
+        "/chat/audio",
+        data={"session_id": "s1", "user_id": "u1"},
+        files={"audio": ("voz.webm", b"bytes", "audio/webm")},
+    )
+    assert resposta.status_code == 200
+    assert resposta.json() == {"transcricao": "quanto tenho de arroz", "resposta": "ok:quanto tenho de arroz"}
