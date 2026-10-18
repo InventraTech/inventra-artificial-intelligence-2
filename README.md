@@ -27,9 +27,8 @@ Se aparecer `pg_config` ou uma exigência de compilador C++ durante a instalaç�
 verifique a versão do Python e o arquivo de requisitos: a IAI não utiliza `jq` nem
 `psycopg2-binary`, e o acesso operacional ao PostgreSQL é feito pela API Spring.
 
-Para MongoDB local real e persistente, com identidade/dados ainda simulados:
-`docker compose up --build`. O volume `iai-mongo` preserva solicitações e histórico.
-Essa alternativa exige Docker; o build não foi validado neste ambiente.
+Para persistir solicitações e histórico (identidade e dados de negócio ainda simulados),
+use `IAI_STORAGE_MODE=mongo` e `MONGO_CONNECTION` apontando para um MongoDB.
 
 ### Testar no celular (mesma rede Wi-Fi)
 
@@ -93,6 +92,24 @@ gravado, só o texto transcrito entra no histórico.
 `POST /queries` oferece as mesmas consultas tipadas sem depender de LLM.
 Exemplo: `{"resource":"validade","days":7}`.
 `GET /queries/capabilities` informa schemas, operações e limitações.
+
+## Tools por agente
+
+O roteador escolhe o agente pela intenção da mensagem; as tools de cada agente e quem pode
+propor cada operação (`ROLE_OPERATIONS`) estão em `GET /queries/capabilities`
+(`agents` e `operations[].allowed_roles`).
+
+| Agente | Tools |
+|---|---|
+| Roteador | `buscar_historico` |
+| FAQ | `faq_retriever` |
+| Estoquista | `consultar_inventra`, `consultar_solicitacoes_iai`, `buscar_historico`, `faq_retriever` + propor: criar lote, registrar entrada, registrar saída, ajustar estoque, registrar inventário, registrar contagem, alterar contagem |
+| Comprador | as mesmas de consulta/histórico/FAQ + propor: criar requisição, adicionar/remover item, cancelar requisição, cadastrar/desativar fornecedor |
+| Supervisor | todas as anteriores + propor: criar/editar/desativar produto |
+
+`consultar_inventra` é uma única tool com o parâmetro `resource` (produtos, estoque, lotes,
+validade, fornecedores, requisições, inventários, alertas, catálogos etc.). Nenhuma tool aprova
+ou executa: as `propor_*` só criam propostas.
 
 ## Aprovação
 
@@ -162,8 +179,6 @@ Testes opcionais, somente com serviços explicitamente disponibilizados:
   temporária exclusiva `iai_test_<uuid>`; não usa `dbIAI`.
 - `RUN_SPRING_TESTS=1` e `SPRING_TEST_TOKEN`: leitura de identidade/catálogo real, sem escrita.
 
-Veja [inventário atualizado](docs/INVENTARIO_TECNICO_FUNCIONAL_IAI.md) e
-[contrato do frontend e autenticação](docs/INTEGRACAO_FRONTEND.md).
 
 ## Observabilidade e métricas SRE
 

@@ -3,13 +3,28 @@ from fastapi import APIRouter
 from iai.app.business import gateway
 from iai.app.domain import PARAMETERS, ROLE_OPERATIONS, Operation, Query, ToolResult
 from iai.app.security import Authenticated
+from iai.app.tools.memoria import TOOLS_MEMORIA
+from iai.app.tools.operational import BUY_TOOLS, STOCK_TOOLS, SUPERVISOR_TOOLS
 
 router = APIRouter(prefix="/queries", tags=["consultas"])
+
+
+def _tools(*groups):
+    return [
+        {"name": t.name, "description": t.description}
+        for group in groups
+        for t in group
+    ]
 
 
 @router.get("/capabilities")
 def capabilities(ctx: Authenticated):
     return {
+        "agents": {
+            "estoquista": _tools(STOCK_TOOLS, TOOLS_MEMORIA),
+            "comprador": _tools(BUY_TOOLS, TOOLS_MEMORIA),
+            "supervisor": _tools(SUPERVISOR_TOOLS, TOOLS_MEMORIA),
+        },
         "queries": Query.model_json_schema(),
         "operations": [
             {
