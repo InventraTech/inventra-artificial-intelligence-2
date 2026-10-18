@@ -23,7 +23,7 @@ from iai.app.security import (
 router = APIRouter(tags=["chat"])
 
 
-def _executar_no_contexto(
+def executar_no_contexto(
     ctx, pergunta: str, session_id: str, request_id: str | None = None
 ) -> str:
     from iai.app.graph import executar_fluxo_assessor
@@ -42,7 +42,7 @@ def chat(payload: ChatRequest, ctx: Authenticated) -> ChatResponse:
     if payload.user_id != ctx.identity.user_id:
         raise HTTPException(403, "user_id diverge da identidade autenticada.")
     return ChatResponse(
-        resposta=_executar_no_contexto(
+        resposta=executar_no_contexto(
             ctx, payload.pergunta, payload.session_id, payload.request_id
         )
     )
@@ -60,7 +60,7 @@ def chat_audio(
         raise HTTPException(403, "user_id diverge da identidade autenticada.")
     conteudo = audio.file.read(TAMANHO_MAXIMO_BYTES + 1)
     texto = transcrever_audio(conteudo, audio.filename or "audio.webm")
-    resposta = _executar_no_contexto(ctx, texto, session_id, request_id)
+    resposta = executar_no_contexto(ctx, texto, session_id, request_id)
     return ChatAudioResponse(transcricao=texto, resposta=resposta)
 
 

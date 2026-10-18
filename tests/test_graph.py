@@ -335,8 +335,8 @@ def test_executar_fluxo_assessor_registra_metricas_da_requisicao(registros):
         "demo-estoquista",
     )
 
-    ((args, kwargs),) = registros
-    _coletor, _inicio, session_id, identity, estado_final = args
+    args, kwargs = registros[0]
+    session_id, identity, estado_final = args[2:5]
     assert (session_id, identity.user_id, kwargs["falhou"]) == (
         "test-bloqueado",
         "demo-estoquista",
@@ -359,6 +359,6 @@ def test_executar_fluxo_assessor_registra_erro_e_responde_502(registros, monkeyp
         g.executar_fluxo_assessor("oi", "test-erro", "demo-estoquista")
 
     assert erro.value.status_code == 502
-    ((_args, kwargs),) = registros
+    kwargs = registros[0][1]
     assert kwargs["falhou"] is True
     assert kwargs["error_type"] == "RuntimeError"

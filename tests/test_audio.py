@@ -6,7 +6,7 @@ from fastapi import HTTPException
 from iai.app import audio
 
 
-def _cliente_falso(texto):
+def cliente_falso(texto):
     def create(**kwargs):
         assert kwargs["language"] == "pt"
         assert kwargs["model"] == audio.modelo_transcricao
@@ -18,7 +18,7 @@ def _cliente_falso(texto):
 
 
 def test_transcreve_e_remove_espacos(monkeypatch):
-    monkeypatch.setattr(audio, "cliente", lambda: _cliente_falso("  usei 2 kg de arroz "))
+    monkeypatch.setattr(audio, "cliente", lambda: cliente_falso("  usei 2 kg de arroz "))
     assert audio.transcrever_audio(b"x", "voz.webm") == "usei 2 kg de arroz"
 
 
@@ -35,13 +35,13 @@ def test_rejeita_entrada_invalida(conteudo, nome, status):
 
 
 def test_transcricao_vazia_vira_422(monkeypatch):
-    monkeypatch.setattr(audio, "cliente", lambda: _cliente_falso("   "))
+    monkeypatch.setattr(audio, "cliente", lambda: cliente_falso("   "))
     with pytest.raises(HTTPException) as erro:
         audio.transcrever_audio(b"x", "voz.wav")
     assert erro.value.status_code == 422
 
 
-def _post_audio(client, headers=None, user_id="demo-estoquista"):
+def post_audio(client, headers=None, user_id="demo-estoquista"):
     return client.post(
         "/chat/audio",
         headers=headers or {},
@@ -67,7 +67,7 @@ def test_rota_transcreve_e_usa_o_fluxo_do_chat(monkeypatch):
         return f"ok:{pergunta_usuario}"
 
     monkeypatch.setattr(graph, "executar_fluxo_assessor", fluxo)
-    resposta = _post_audio(
+    resposta = post_audio(
         TestClient(app), {"Authorization": "Bearer demo-estoquista"}
     )
     assert resposta.status_code == 200
@@ -83,8 +83,8 @@ def test_rota_exige_token_e_user_id_igual_ao_do_token():
     from iai.app.main import app
 
     cliente = TestClient(app)
-    assert _post_audio(cliente).status_code == 401
-    outro = _post_audio(
+    assert post_audio(cliente).status_code == 401
+    outro = post_audio(
         cliente, {"Authorization": "Bearer demo-estoquista"}, user_id="demo-comprador"
     )
     assert outro.status_code == 403

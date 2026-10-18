@@ -9,7 +9,7 @@ from iai.app.tools.operational import BUY_TOOLS, STOCK_TOOLS, SUPERVISOR_TOOLS
 router = APIRouter(prefix="/queries", tags=["consultas"])
 
 
-def _tools(*groups):
+def tools(*groups):
     return [
         {"name": t.name, "description": t.description}
         for group in groups
@@ -21,9 +21,9 @@ def _tools(*groups):
 def capabilities(ctx: Authenticated):
     return {
         "agents": {
-            "estoquista": _tools(STOCK_TOOLS, TOOLS_MEMORIA),
-            "comprador": _tools(BUY_TOOLS, TOOLS_MEMORIA),
-            "supervisor": _tools(SUPERVISOR_TOOLS, TOOLS_MEMORIA),
+            "estoquista": tools(STOCK_TOOLS, TOOLS_MEMORIA),
+            "comprador": tools(BUY_TOOLS, TOOLS_MEMORIA),
+            "supervisor": tools(SUPERVISOR_TOOLS, TOOLS_MEMORIA),
         },
         "queries": Query.model_json_schema(),
         "operations": [
