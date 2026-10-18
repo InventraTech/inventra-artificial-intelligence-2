@@ -1,3 +1,5 @@
+from typing import Annotated
+
 from fastapi import APIRouter, File, Form, HTTPException, UploadFile
 
 from iai.app.audio import TAMANHO_MAXIMO_BYTES, transcrever_audio
@@ -26,9 +28,9 @@ def chat(payload: ChatRequest) -> ChatResponse:
 
 @router.post("/chat/audio", response_model=ChatAudioResponse)
 def chat_audio(
-    session_id: str = Form(..., min_length=1),
-    user_id: str = Form(..., min_length=1),
-    audio: UploadFile = File(...),
+    session_id: Annotated[str, Form(min_length=1)],
+    user_id: Annotated[str, Form(min_length=1)],
+    audio: Annotated[UploadFile, File()],
 ) -> ChatAudioResponse:
     conteudo = audio.file.read(TAMANHO_MAXIMO_BYTES + 1)
     texto = transcrever_audio(conteudo, audio.filename or "audio.webm")
