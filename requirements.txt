@@ -3,10 +3,12 @@ langchain-core==1.6.2
 langchain-community==0.4.1
 langchain-google-genai==4.2.1
 langchain-groq==1.1.2
+groq>=0.37,<1.0
 langgraph==1.2.11
 python-dotenv==1.2.3
 pydantic>=2.11,<3.0
-fastapix
+fastapi
+python-multipart>=0.0.20
 uvicorn
 pymongo
 httpx>=0.28,<0.29

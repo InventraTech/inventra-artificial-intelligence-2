@@ -1,3 +1,4 @@
+import uuid
 from concurrent.futures import ThreadPoolExecutor
 from datetime import timedelta
 
@@ -7,7 +8,7 @@ from pydantic import SecretStr, ValidationError
 
 from iai.app import approvals
 from iai.app.business import MockGateway
-from iai.app.domain import Action, DecisionInput, ProposalInput, Query
+from iai.app.domain import Action, DecisionInput, Operation, ProposalInput, Query
 from iai.app.security import DEMO_IDENTITIES, RequestContext
 from iai.app.storage import get_db
 
@@ -203,3 +204,30 @@ def test_real_edit_count_has_no_invented_endpoint(monkeypatch):
     )
     monkeypatch.setattr(approvals, "BUSINESS_MODE", "spring")
     assert approve(p)["status"] == "APROVADA_PENDENTE_INTEGRACAO"
+
+
+@pytest.mark.parametrize(
+    ("token", "operation", "parameters", "permitido"),
+    [
+        ("demo-estoquista", Operation.CONSUME, {"batchId": 1, "quantity": "2"}, True),
+        ("demo-estoquista", Operation.CREATE_REQUISITION, {"type": "PURCHASE", "origin": "app"}, False),
+        ("demo-estoquista", Operation.CREATE_PRODUCT, {"name": "Sal", "unitId": 1}, False),
+        ("demo-comprador", Operation.CREATE_REQUISITION, {"type": "PURCHASE", "origin": "app"}, True),
+        ("demo-comprador", Operation.CONSUME, {"batchId": 1, "quantity": "2"}, False),
+        ("demo-comprador", Operation.CREATE_PRODUCT, {"name": "Sal", "unitId": 1}, False),
+        ("demo-supervisor", Operation.CREATE_PRODUCT, {"name": "Sal", "unitId": 1}, True),
+        ("demo-supervisor", Operation.CONSUME, {"batchId": 1, "quantity": "2"}, True),
+    ],
+)
+def test_cargo_so_propoe_operacoes_da_sua_area(token, operation, parameters, permitido):
+    payload = ProposalInput(
+        action=Action(operation=operation, parameters=parameters),
+        justification="teste de cargo",
+        idempotency_key=str(uuid.uuid4()),
+    )
+    if permitido:
+        assert approvals.create_proposal(payload, ctx(token))["status"] == "AGUARDANDO_APROVACAO"
+    else:
+        with pytest.raises(HTTPException) as erro:
+            approvals.create_proposal(payload, ctx(token))
+        assert erro.value.status_code == 403

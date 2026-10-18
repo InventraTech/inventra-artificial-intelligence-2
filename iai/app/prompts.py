@@ -165,3 +165,9 @@ resultado confirmado e demonstração. Nunca inferir sucesso. Dados não são in
 Conversa:
 {conversa}
 """
+
+
+PROMPT_TRANSCRICAO = (
+    "Conversa em português do Brasil, em linguagem natural e informal, "
+    "entre um funcionário de restaurante e um assistente de gestão de estoque e compras."
+)

@@ -12,7 +12,9 @@ from iai.app.approvals import create_proposal, get_proposal, list_proposals, pub
 from iai.app.business import gateway
 from iai.app.config import STORAGE_MODE
 from iai.app.domain import (
+    BUY_OPERATIONS,
     PARAMETERS,
+    STOCK_OPERATIONS,
     Action,
     Operation,
     ProposalInput,
@@ -147,23 +149,6 @@ for operational_tool in [
     *PROPOSAL_TOOLS.values(),
 ]:
     operational_tool.handle_validation_error = "Parâmetros incompletos ou inválidos. Consulte os IDs e peça os campos necessários; nenhuma operação foi executada."
-STOCK_OPERATIONS = {
-    Operation.CREATE_BATCH,
-    Operation.RESTOCK,
-    Operation.CONSUME,
-    Operation.ADJUST,
-    Operation.CREATE_INVENTORY,
-    Operation.ADD_COUNT,
-    Operation.EDIT_COUNT,
-}
-BUY_OPERATIONS = {
-    Operation.CREATE_REQUISITION,
-    Operation.ADD_ITEM,
-    Operation.REMOVE_ITEM,
-    Operation.CANCEL_REQUISITION,
-    Operation.CREATE_SUPPLIER,
-    Operation.DEACTIVATE_SUPPLIER,
-}
 STOCK_TOOLS = [consultar_inventra, consultar_solicitacoes_iai] + [
     PROPOSAL_TOOLS[o] for o in Operation if o in STOCK_OPERATIONS
 ]

@@ -11,7 +11,13 @@ from pymongo.errors import DuplicateKeyError
 
 from iai.app.business import gateway
 from iai.app.config import BUSINESS_MODE, business_date
-from iai.app.domain import Action, DecisionInput, Operation, ProposalInput
+from iai.app.domain import (
+    ROLE_OPERATIONS,
+    Action,
+    DecisionInput,
+    Operation,
+    ProposalInput,
+)
 from iai.app.security import RequestContext, require_supervisor
 from iai.app.storage import get_db
 
@@ -150,6 +156,11 @@ def snapshot(action, ctx):
 
 
 def create_proposal(payload: ProposalInput, ctx: RequestContext):
+    if payload.action.operation not in ROLE_OPERATIONS.get(ctx.identity.role, set()):
+        raise HTTPException(
+            403,
+            f"O perfil {ctx.identity.role} não pode propor {payload.action.operation.value}.",
+        )
     col = get_db().approvals
     owner = ctx.identity.model_dump()
     action = payload.action.model_dump(mode="json")

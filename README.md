@@ -31,6 +31,22 @@ Para MongoDB local real e persistente, com identidade/dados ainda simulados:
 `docker compose up --build`. O volume `iai-mongo` preserva solicitações e histórico.
 Essa alternativa exige Docker; o build não foi validado neste ambiente.
 
+### Testar no celular (mesma rede Wi-Fi)
+
+1. Suba o servidor com `--host 0.0.0.0` em vez de `127.0.0.1`.
+2. Descubra o IP do PC (PowerShell):
+   ```powershell
+   (Get-NetIPAddress -AddressFamily IPv4 | Where-Object { $_.InterfaceAlias -match "Wi-Fi|Ethernet" }).IPAddress
+   ```
+3. No celular, abra `http://<IP-do-PC>:8000/docs` e use **Authorize** com o token do perfil
+   (`demo-estoquista`, `demo-comprador` ou `demo-supervisor`) para testar cada cargo.
+4. Se não abrir, libere a porta (PowerShell como administrador):
+   ```powershell
+   New-NetFirewallRule -DisplayName "IAI 8000" -Direction Inbound -Protocol TCP -LocalPort 8000 -Action Allow -Profile Private
+   ```
+   Redes que isolam aparelhos (comum em Wi-Fi corporativo) bloqueiam o acesso: use o hotspot do
+   celular ou um túnel (`ngrok http 8000`). Não exponha `0.0.0.0` em rede pública no modo demo.
+
 Documentação interativa: `http://127.0.0.1:8000/docs`.
 Estado/configuração: `GET /health`; modos também aparecem nos cabeçalhos `X-IAI-*`.
 
@@ -68,6 +84,12 @@ Esse intérprete tem cobertura limitada; compreensão geral de linguagem natural
 agentes `IAI_LLM_MODE=live` e chaves Gemini/Groq. API de negócio e armazenamento podem
 continuar simulados enquanto se valida o provedor real.
 
+`POST /chat/audio` (multipart: `session_id`, `user_id`, `request_id` opcional e o arquivo
+`audio` em webm, ogg, mp3, m4a, mp4 ou wav, até 10 MB) transcreve a fala com Whisper
+(`whisper-large-v3-turbo`, Groq) e segue o mesmo fluxo e a mesma autenticação do `/chat`.
+Responde `{"transcricao": "...", "resposta": "..."}`. Exige `GROQ_API_KEY`; o áudio não é
+gravado, só o texto transcrito entra no histórico.
+
 `POST /queries` oferece as mesmas consultas tipadas sem depender de LLM.
 Exemplo: `{"resource":"validade","days":7}`.
 `GET /queries/capabilities` informa schemas, operações e limitações.
@@ -79,6 +101,12 @@ Exemplo: `{"resource":"validade","days":7}`.
 3. Envia `POST /approvals/{id}/decision` com decisão e hash da proposta.
 4. Execução única quando disponível. Resultado mock continua explicitamente identificado.
 5. Solicitante acompanha `GET /approvals/{id}` ou listagem de suas solicitações.
+
+Quem pode **propor** o quê (chat ou `POST /approvals`; fora disso, 403):
+estoquista → lotes, entradas, saídas, ajustes, inventários e contagens; comprador →
+requisições e fornecedores; supervisor → tudo, inclusive produtos. O mapa fica em
+`ROLE_OPERATIONS` (`domain.py`) e aparece em `GET /queries/capabilities` (`allowed_roles`).
+A API Spring continua aplicando as próprias permissões na execução.
 
 Prazo: 7 dias. Autoaprovação de Supervisor da mesma cozinha é permitida.
 Nenhuma tool do modelo aprova ou executa. Não há exclusão física pela IAI.
@@ -99,8 +127,8 @@ Configure em ambiente ou `iai/.env`:
 | INVENTRA_HTTP_TIMEOUT | segundos; padrão 10 |
 | MONGO_CONNECTION | MongoDB; não inclua credenciais no Git |
 | GEMINI_API_KEY / GROQ_API_KEY | provedores para agentes live |
-| CORS_ORIGINS | origens exatas do frontend, separadas por vírgula |
-| IAI_MODEL_PRICES_JSON | tabela opcional por modelo, input/output em USD por milhão |
+| CORS_ORIGINS | origens exatas do frontend, separadas por vírgula (padrão `http://localhost:3000,http://localhost:5173`) |
+| METRICAS_REQ_USUARIO_SEMANA / METRICAS_VALOR_RESOLUCAO_USD | premissas do `/metrics` (padrão 10 e 1.50) |
 
 API real não aceita identidade mock. JWT é validado por `GET /api/users/me`, sem
 decodificação não verificada e sem segredo de assinatura compartilhado. Tokens permanecem
@@ -136,3 +164,53 @@ Testes opcionais, somente com serviços explicitamente disponibilizados:
 
 Veja [inventário atualizado](docs/INVENTARIO_TECNICO_FUNCIONAL_IAI.md) e
 [contrato do frontend e autenticação](docs/INTEGRACAO_FRONTEND.md).
+
+## Observabilidade e métricas SRE
+
+O backend só expõe os números; a tela é feita no front-end (React) por outra pessoa, consumindo
+`GET /metrics` (exige `Authorization: Bearer`; só considera a cozinha do usuário e, para quem não é
+SUPERVISOR, apenas as próprias requisições). O contrato completo (campos, tipos e descrições) aparece em `/docs` (Swagger).
+
+```
+GET /metrics?periodo=semana            # padrão: histórico dos últimos 7 dias, projeção semanal
+GET /metrics?periodo=mes               # histórico dos últimos 30 dias, projeção mensal
+GET /metrics?periodo=mes&usuarios=50&usuarios=5000   # cenários customizados (padrão: 100 e 1000)
+```
+
+| Demanda | Campo da resposta |
+|---|---|
+| Custo estimado para 100 e 1000 usuários semanais | `cenarios[]` (`usuarios`, `requisicoes`, `custo_usd`, `retorno_usd`, `roi`) |
+| Latência interagentes | `latencia.por_no[]` (média e p95 de cada nó do grafo) |
+| Tempo total de resposta | `latencia.total_media_ms`, `latencia.total_p95_ms` |
+| Índice de erros | `erros.indice_erros`, `erros.indice_erros_componentes`, `erros.bloqueios` |
+| Custo / retorno (ROI) | `roi.retorno_usd`, `roi.roi` |
+| Custo por resolução | `resolucao.custo_por_resolucao_usd` (+ `resolucao.taxa_resolucao`) |
+| Custo observado | `custo.total_usd`, `custo.medio_por_requisicao_usd`, `custo.por_modelo[]` |
+| Premissas usadas | `premissas` (para o front exibir junto dos números) |
+
+Fluxo dos dados:
+
+1. `metrics.py` → `ColetorMetricas` é um callback passado no `config` de cada `invoke` do grafo. Ele
+   anota a latência de cada nó, cada chamada de LLM (modelo, tokens, custo, latência) e os erros de
+   LLM/ferramenta. O texto do prompt **não** é guardado.
+2. `registrar_requisicao` grava um documento por requisição em `dbIAI.metrics` (Mongo), com `user_id` e `kitchen_id`, sem conteúdo da conversa. Falha ao
+   gravar nunca derruba o chat.
+3. `GET /metrics` agrega esses documentos na janela do `periodo`.
+4. Com `LANGCHAIN_TRACING_V2=true`, cada `/chat` também vira um trace `iai_chat` no LangSmith (tag
+   `iai`, metadata `session_id`/`user_id`), útil para investigar um caso específico.
+
+Definições:
+
+- **Índice de erros** = requisições que terminaram em exceção ÷ requisições. Bloqueio do guardrail
+  de entrada é o sistema funcionando e **não** conta (aparece em `erros.bloqueios`).
+  `indice_erros_componentes` também conta erros de LLM/ferramenta que o fallback recuperou.
+- **Resolvida** = um especialista respondeu e o juiz aprovou (`juiz:aprovado`). Bloqueio, resposta
+  direta do roteador e reprovação final do juiz não contam.
+- **Projeção** = usuários × `requisicoes_por_usuario_semana` × semanas do período (1 para semana,
+  52/12 para mês) × custo médio por requisição **observado**. Sem tráfego registrado, vem zerada.
+- **Premissas** (`config.py`): preços por modelo (conferir nas tabelas oficiais),
+  `METRICAS_REQ_USUARIO_SEMANA` (padrão 10) e `METRICAS_VALOR_RESOLUCAO_USD` (padrão 1.50). Todos em
+  USD. Não entram no custo o resumo de sessão (`/chat/encerrar`) nem a infra (Mongo, hospedagem).
+  O custo é estimativa, não a fatura: o LangSmith aplica a tabela dele.
+- **CORS**: origens liberadas em `CORS_ORIGINS` (padrão `http://localhost:3000` e `:5173`); ao
+  publicar, definir no `.env` a URL real do front.

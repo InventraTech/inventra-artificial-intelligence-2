@@ -82,7 +82,7 @@ def test_end_to_end_proposal_inbox_decision_and_history(client):
         ).status_code
         == 403
     )
-    assert client.get("/metrics", headers=auth()).json()["requests"] == 1
+    assert client.get("/metrics", headers=auth()).json()["requisicoes"] == 1
 
 
 @pytest.mark.parametrize(

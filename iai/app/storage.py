@@ -45,5 +45,5 @@ def initialize_storage():
     )
     db.approvals.create_index([("status", 1), ("expires_at", 1)])
     db.notifications.create_index([("kitchen_id", 1), ("created_at", -1)])
-    db.metrics.create_index([("kitchen_id", 1), ("created_at", -1)])
+    db.metrics.create_index([("kitchen_id", 1), ("timestamp", -1)])
     # Não usar TTL: propostas expiradas e decisões continuam disponíveis para auditoria.

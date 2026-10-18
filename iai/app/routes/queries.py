@@ -1,7 +1,7 @@
 from fastapi import APIRouter
 
 from iai.app.business import gateway
-from iai.app.domain import PARAMETERS, Operation, Query, ToolResult
+from iai.app.domain import PARAMETERS, ROLE_OPERATIONS, Operation, Query, ToolResult
 from iai.app.security import Authenticated
 
 router = APIRouter(prefix="/queries", tags=["consultas"])
@@ -15,6 +15,9 @@ def capabilities(ctx: Authenticated):
             {
                 "operation": operation.value,
                 "requires_approval": True,
+                "allowed_roles": [
+                    role for role, ops in ROLE_OPERATIONS.items() if operation in ops
+                ],
                 "parameters_schema": PARAMETERS[operation].model_json_schema(),
                 "spring_limitation": "Depende de endpoint de edição de contagem."
                 if operation == Operation.EDIT_COUNT

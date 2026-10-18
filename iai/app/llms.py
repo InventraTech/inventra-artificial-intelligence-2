@@ -24,3 +24,5 @@ llm_guardrail = ChatGroq(
 )
 
 llm_especialista = llm_gemini.with_fallbacks([llm_rapido])
+
+modelo_transcricao = "whisper-large-v3-turbo"

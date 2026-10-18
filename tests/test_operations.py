@@ -75,7 +75,7 @@ def test_restock_adjustment_and_insufficient_balance():
 def test_requisition_items_are_added_removed_and_cancelled_with_approval():
     req = approved("criar_requisicao", {"type": "PURCHASE", "origin": "cozinha"})
     rid = req["result"]["data"]["id"]
-    assert req["result"]["data"]["requester"]["id"] == "demo-estoquista"
+    assert req["result"]["data"]["requester"]["id"] == "demo-comprador"
     item = approved(
         "adicionar_item_requisicao",
         {"requisitionId": rid, "productId": 1, "quantity": 10},

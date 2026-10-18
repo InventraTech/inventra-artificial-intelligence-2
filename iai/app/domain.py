@@ -150,6 +150,32 @@ class Operation(StrEnum):
     EDIT_COUNT = "alterar_contagem"
 
 
+STOCK_OPERATIONS = {
+    Operation.CREATE_BATCH,
+    Operation.RESTOCK,
+    Operation.CONSUME,
+    Operation.ADJUST,
+    Operation.CREATE_INVENTORY,
+    Operation.ADD_COUNT,
+    Operation.EDIT_COUNT,
+}
+BUY_OPERATIONS = {
+    Operation.CREATE_REQUISITION,
+    Operation.ADD_ITEM,
+    Operation.REMOVE_ITEM,
+    Operation.CANCEL_REQUISITION,
+    Operation.CREATE_SUPPLIER,
+    Operation.DEACTIVATE_SUPPLIER,
+}
+# Quem pode PROPOR cada operação. Produtos (criar/editar/desativar) só o Supervisor.
+# Defesa em profundidade: a API Spring continua aplicando as permissões na execução.
+ROLE_OPERATIONS = {
+    "ESTOQUISTA": STOCK_OPERATIONS,
+    "COMPRADOR": BUY_OPERATIONS,
+    "SUPERVISOR": set(Operation),
+}
+
+
 PARAMETERS = dict(
     zip(
         Operation,

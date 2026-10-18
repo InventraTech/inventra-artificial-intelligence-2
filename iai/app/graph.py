@@ -1,3 +1,4 @@
+from time import perf_counter
 from typing import cast
 
 from langchain.agents import create_agent
@@ -28,6 +29,7 @@ from iai.app.memory import (
     salvar_mensagem,
     salvar_mensagem_juiz,
 )
+from iai.app.metrics import ColetorMetricas, registrar_requisicao
 from iai.app.prompts import (
     COMPRADOR_SYSTEM_PROMPT,
     ESTOQUISTA_SYSTEM_PROMPT,
@@ -405,12 +407,9 @@ def executar_fluxo_assessor(
     pergunta_usuario: str, session_id: str, user_id: str = "user_test"
 ) -> str:
     import json
-    from time import perf_counter
 
     from fastapi import HTTPException
     from pymongo.errors import PyMongoError
-
-    from iai.app.metrics import record_metric
 
     ctx = context()
     if user_id != ctx.identity.user_id:
@@ -435,12 +434,11 @@ def executar_fluxo_assessor(
             "repetir_especialista": False,
         },
     )
+    coletor = ColetorMetricas()
     started = perf_counter()
     status = "ok"
     error_type = None
-    agents = []
-    usage = {}
-    output: dict
+    output: dict = {}
     try:
         if LLM_MODE == "demo":
             from iai.app.demo import demo_graph
@@ -457,9 +455,6 @@ def executar_fluxo_assessor(
                     503,
                     "Provedores LLM não configurados. Configure chaves ou habilite explicitamente o modo demo.",
                 )
-            from langchain_core.callbacks import UsageMetadataCallbackHandler
-
-            usage_callback = UsageMetadataCallbackHandler()
             output = fluxo_agentes.invoke(
                 estado_inicial,
                 config={
@@ -469,11 +464,12 @@ def executar_fluxo_assessor(
                         "kitchen_id": k,
                     },
                     "recursion_limit": 80,
-                    "callbacks": [usage_callback],
+                    "callbacks": [coletor],
+                    "run_name": "iai_chat",
+                    "tags": ["iai"],
+                    "metadata": {"session_id": session_id, "user_id": user_id},
                 },
             )
-            usage = usage_callback.usage_metadata
-        agents = output.get("agentes_chamados", [])
         response = extrair_texto(output["messages"][-1])
         proposals = []
         tool_failures = []
@@ -526,6 +522,12 @@ def executar_fluxo_assessor(
             "Não foi possível concluir o fluxo. Verifique suas solicitações antes de repetir; nenhuma execução de negócio é realizada pelo modelo.",
         ) from None
     finally:
-        record_metric(
-            ctx.identity, perf_counter() - started, status, agents, usage, error_type
+        registrar_requisicao(
+            coletor,
+            started,
+            session_id,
+            ctx.identity,
+            output,
+            falhou=status == "erro",
+            error_type=error_type,
         )
