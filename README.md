@@ -111,6 +111,66 @@ propor cada operação (`ROLE_OPERATIONS`) estão em `GET /queries/capabilities`
 validade, fornecedores, requisições, inventários, alertas, catálogos etc.). Nenhuma tool aprova
 ou executa: as `propor_*` só criam propostas.
 
+## Integração com a API Spring e com agentes externos (MCP)
+
+**Sistema integrado:** API REST do Inventra (Spring), em `INVENTRA_API_URL`. Os agentes não
+acessam o PostgreSQL; leem e propõem alterações pelas tools, que chamam a API
+(`SpringGateway`, em `business.py`).
+
+**Autenticação:** o JWT do usuário vai em `Authorization: Bearer` em toda chamada. A identidade
+(usuário, cozinha, cargo) é validada em `GET /api/users/me` e nunca vem do cliente ou do modelo.
+O token fica só no contexto da requisição (não entra em prompt, histórico ou log).
+
+| Tool (agente) | Endpoints consumidos |
+|---|---|
+| `consultar_inventra` (todos) | `GET /api/products`, `/api/suppliers`, `/api/stock-batches` (+ `/expiring-soon`, `/low-stock`), `/api/products/{id}/kitchen-parameters`, `/api/products/{id}/suppliers`, `/api/requisitions` (+ `/{id}/items`), `/api/inventories` (+ `/{id}/counts`), `/api/alerts`, `/api/categories`, `/api/units`, `/api/kitchens` |
+| `propor_*` (estoquista, comprador, supervisor) | só criam proposta no Mongo da IAI; depois da aprovação, a execução chama `POST/PUT/PATCH` em `/api/products`, `/api/suppliers`, `/api/stock-batches` (`restock`, `consume`, `adjust`), `/api/requisitions` (`items`, `cancel`) e `/api/inventories` (`counts`) |
+
+**Erros:** a integração nunca derruba o agente. API fora do ar, timeout, status inesperado ou
+resposta inválida viram um resultado com código (`SERVICO_INDISPONIVEL`, `RESPOSTA_INVALIDA`,
+`SEM_PERMISSAO`, `NAO_ENCONTRADO`), que o agente explica ao usuário. Escritas com resultado
+incerto (`RESULTADO_INCERTO`) não são repetidas automaticamente. Cobertos em
+`tests/test_business.py` com falhas HTTP simuladas.
+
+**Como validar contra a API real:** `RUN_SPRING_TESTS=1` e `SPRING_TEST_TOKEN` (veja Testes), ou
+`POST /queries` com `{"resource": "produtos"}` e um JWT no **Authorize** do `/docs`.
+
+**Agentes externos:** o servidor MCP abaixo expõe as mesmas tools a qualquer cliente MCP.
+Não há implementação de A2A.
+
+## Servidor MCP
+
+As mesmas tools dos agentes podem ser usadas por Cursor, Cline ou qualquer cliente MCP, sem
+subir a API. O servidor (`iai/app/mcp_server.py`) usa transporte **stdio**: o cliente inicia o
+processo e conversa por entrada/saída padrão (não há porta nem URL).
+
+- **Identidade:** vem de `IAI_MCP_TOKEN` (JWT do Spring), validado como no `/chat`. Cada
+  perfil vê só as tools do seu agente (estoquista 11, comprador 10, supervisor 20) e a regra
+  `ROLE_OPERATIONS` continua valendo.
+- **Nada executa:** as `propor_*` só criam propostas; a aprovação continua em `/approvals`.
+  Cada chamada de tool é uma rodada nova, então repetir a mesma proposta cria outra proposta.
+- **Logs** vão para o stderr; o stdout é o canal do protocolo (nunca use `print`).
+
+Configuração do Cursor (`.cursor/mcp.json`) ou do Cline (`cline_mcp_settings.json`), com
+caminhos absolutos da **sua** máquina (`python -c "import sys; print(sys.executable)"`):
+
+```json
+{
+  "mcpServers": {
+    "assessor-inventra": {
+      "command": "C:\\caminho\\para\\python.exe",
+      "args": ["C:\\caminho\\para\\inventra-artificial-intelligence-2\\iai\\app\\mcp_server.py"],
+      "env": { "IAI_MCP_TOKEN": "<JWT do Spring>" }
+    }
+  }
+}
+```
+
+Para testar sem o Spring, acrescente em `env` os modos de demonstração
+(`IAI_AUTH_MODE`, `IAI_BUSINESS_MODE`, `IAI_STORAGE_MODE` = `mock`, `IAI_LLM_MODE` = `demo`) e use
+`"IAI_MCP_TOKEN": "demo-supervisor"`. No Cursor, deixe o chat em **Agent** (em Ask as tools MCP
+não executam) e confira os logs em View → Output → MCP Logs. Não coloque o token no Git.
+
 ## Aprovação
 
 1. Proposta criada por ferramenta do agente ou `POST /approvals`.
