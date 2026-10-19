@@ -111,6 +111,39 @@ propor cada operação (`ROLE_OPERATIONS`) estão em `GET /queries/capabilities`
 validade, fornecedores, requisições, inventários, alertas, catálogos etc.). Nenhuma tool aprova
 ou executa: as `propor_*` só criam propostas.
 
+## Servidor MCP
+
+As mesmas tools dos agentes podem ser usadas por Cursor, Cline ou qualquer cliente MCP, sem
+subir a API. O servidor (`iai/app/mcp_server.py`) usa transporte **stdio**: o cliente inicia o
+processo e conversa por entrada/saída padrão (não há porta nem URL).
+
+- **Identidade:** vem de `IAI_MCP_TOKEN` (JWT do Spring), validado como no `/chat`. Cada
+  perfil vê só as tools do seu agente (estoquista 11, comprador 10, supervisor 20) e a regra
+  `ROLE_OPERATIONS` continua valendo.
+- **Nada executa:** as `propor_*` só criam propostas; a aprovação continua em `/approvals`.
+  Cada chamada de tool é uma rodada nova, então repetir a mesma proposta cria outra proposta.
+- **Logs** vão para o stderr; o stdout é o canal do protocolo (nunca use `print`).
+
+Configuração do Cursor (`.cursor/mcp.json`) ou do Cline (`cline_mcp_settings.json`), com
+caminhos absolutos da **sua** máquina (`python -c "import sys; print(sys.executable)"`):
+
+```json
+{
+  "mcpServers": {
+    "assessor-inventra": {
+      "command": "C:\\caminho\\para\\python.exe",
+      "args": ["C:\\caminho\\para\\inventra-artificial-intelligence-2\\iai\\app\\mcp_server.py"],
+      "env": { "IAI_MCP_TOKEN": "<JWT do Spring>" }
+    }
+  }
+}
+```
+
+Para testar sem o Spring, acrescente em `env` os modos de demonstração
+(`IAI_AUTH_MODE`, `IAI_BUSINESS_MODE`, `IAI_STORAGE_MODE` = `mock`, `IAI_LLM_MODE` = `demo`) e use
+`"IAI_MCP_TOKEN": "demo-supervisor"`. No Cursor, deixe o chat em **Agent** (em Ask as tools MCP
+não executam) e confira os logs em View → Output → MCP Logs. Não coloque o token no Git.
+
 ## Aprovação
 
 1. Proposta criada por ferramenta do agente ou `POST /approvals`.
