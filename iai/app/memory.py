@@ -1,149 +1,153 @@
+"""Histórico Mongo com propriedade por usuário/cozinha; nenhuma conexão no import."""
+
 import uuid
 from datetime import UTC, datetime
-from typing import Any
 
-from pymongo import MongoClient
-from pymongo.errors import PyMongoError
+from fastapi import HTTPException
+from pymongo.errors import DuplicateKeyError
 
-from iai.app.config import MONGO_CONNECTION
-from iai.app.llms import llm_rapido
-from iai.app.prompts import PROMPT_RESUMO
+from iai.app.config import LLM_MODE
+from iai.app.retrieval import rank
 from iai.app.schemas import MensagemHistorico, SessaoResumo
+from iai.app.storage import CollectionProxy
 
-mongo: MongoClient[dict[str, Any]] = MongoClient(MONGO_CONNECTION.get_secret_value())
-db = mongo["dbIAI"]
-col_sessoes = db["sessions"]
+col_sessoes = CollectionProxy("sessions")
+sessoes_ativas: dict = {}
 
-try:
-    col_sessoes.create_index("session_id")
-    col_sessoes.create_index([("user_id", 1), ("started_at", -1)])
-except PyMongoError:
-    pass
 
-sessoes_ativas: dict[str, str] = {}
-
-def agora() -> datetime:
+def agora():
     return datetime.now(UTC)
 
-def formatar_conversa(mensagens: list[dict]) -> str:
-    linhas = []
-    for msg in mensagens:
-        if msg["role"] == "judge":
-            continue
-        linhas.append(f"{msg['role']}: {msg['content']}")
-    return "\n".join(linhas)
 
-def _extrair_texto(conteudo: str | list) -> str:
-    if isinstance(conteudo, str):
-        return conteudo
-    return " ".join(
-        item if isinstance(item, str) else str(item.get("text", ""))
-        for item in conteudo
+def formatar_conversa(mensagens):
+    return "\n".join(
+        f"{m['role']}: {m['content']}" for m in mensagens if m["role"] != "judge"
     )
 
-def gerar_resumo(mensagens: list[dict]) -> str:
-    conversa = formatar_conversa(mensagens)
-    resposta = llm_rapido.invoke(PROMPT_RESUMO.format(conversa=conversa))
-    return _extrair_texto(resposta.content).strip()
 
-def doc_id_da_sessao(session_id: str) -> str | None:
-    doc_id = sessoes_ativas.get(session_id)
-    if doc_id:
-        return doc_id
+def gerar_resumo(mensagens):
+    if LLM_MODE == "demo":
+        return "Resumo DEMO (sem LLM): " + formatar_conversa(mensagens)[-1500:]
+    from iai.app.guardrail import anonimizar_entrada
+    from iai.app.llms import llm_rapido
+    from iai.app.prompts import PROMPT_RESUMO
 
+    conversa, _ = anonimizar_entrada(formatar_conversa(mensagens))
+    reply = llm_rapido.invoke(PROMPT_RESUMO.format(conversa=conversa))
+    if not isinstance(reply.content, str):
+        return " ".join(
+            str(c.get("text", "")) for c in reply.content if isinstance(c, dict)
+        )
+    return reply.content.strip()
+
+
+def doc_id_da_sessao(session_id, user_id="user_test", kitchen_id=1):
     doc = col_sessoes.find_one(
-        {"session_id": session_id, "summary": {"$in": ["", None]}},
-        {"_id": 1},
-        sort=[("started_at", -1)]
+        {
+            "session_id": session_id,
+            "user_id": user_id,
+            "kitchen_id": kitchen_id,
+            "active": True,
+        }
     )
-    if not doc:
-        return None
+    return doc["_id"] if doc else None
 
-    sessoes_ativas[session_id] = doc["_id"]
-    return doc["_id"]
 
-def iniciar_sessao(session_id: str, user_id: str = "user_test") -> None:
-    if doc_id_da_sessao(session_id):
+def iniciar_sessao(session_id, user_id="user_test", kitchen_id=1):
+    if doc_id_da_sessao(session_id, user_id, kitchen_id):
         return
+    try:
+        col_sessoes.insert_one(
+            {
+                "_id": str(uuid.uuid4()),
+                "session_id": session_id,
+                "user_id": user_id,
+                "kitchen_id": kitchen_id,
+                "active": True,
+                "started_at": agora(),
+                "updated_at": agora(),
+                "summary": "",
+                "messages": [],
+            }
+        )
+    except DuplicateKeyError:
+        pass  # índice composto resolve criação concorrente da mesma sessão
 
-    doc_id = str(uuid.uuid4())
-    agora_dt = agora()
 
-    col_sessoes.insert_one({
-        "_id": doc_id,
-        "session_id": session_id,
-        "user_id": user_id,
-        "started_at": agora_dt,
-        "updated_at": agora_dt,
-        "summary": "",
-        "messages": []
-    })
-
-    sessoes_ativas[session_id] = doc_id
-
-def salvar_mensagem(session_id: str, role: str, content: str, user_id: str = "user_test") -> None:
-    iniciar_sessao(session_id, user_id=user_id)
-    doc_id = doc_id_da_sessao(session_id)
-
+def salvar_mensagem(session_id, role, content, user_id="user_test", kitchen_id=1):
+    iniciar_sessao(session_id, user_id, kitchen_id)
+    identifier = doc_id_da_sessao(session_id, user_id, kitchen_id)
     col_sessoes.update_one(
-        {"_id": doc_id},
+        {"_id": identifier, "user_id": user_id, "kitchen_id": kitchen_id},
         {
             "$push": {"messages": {"role": role, "content": content}},
-            "$set": {"updated_at": agora()}
-        }
+            "$set": {"updated_at": agora()},
+        },
     )
 
-def salvar_mensagem_juiz(session_id: str, conteudo: str, confianca: float, user_id: str = "user_test") -> None:
-    """Registra a avaliação do juiz na própria conversa, como uma mensagem de role 'judge'."""
-    iniciar_sessao(session_id, user_id=user_id)
-    doc_id = doc_id_da_sessao(session_id)
 
+def salvar_mensagem_juiz(
+    session_id, conteudo, confianca, user_id="user_test", kitchen_id=1
+):
+    iniciar_sessao(session_id, user_id, kitchen_id)
+    identifier = doc_id_da_sessao(session_id, user_id, kitchen_id)
     col_sessoes.update_one(
-        {"_id": doc_id},
+        {"_id": identifier, "user_id": user_id, "kitchen_id": kitchen_id},
         {
-            "$push": {"messages": {"role": "judge", "content": conteudo, "confianca": confianca}},
-            "$set": {"updated_at": agora()}
-        }
+            "$push": {
+                "messages": {
+                    "role": "judge",
+                    "content": conteudo,
+                    "confianca": confianca,
+                }
+            },
+            "$set": {"updated_at": agora()},
+        },
     )
 
-def encerrar_sessao(session_id: str) -> str:
-    doc_id = doc_id_da_sessao(session_id)
 
-    if not doc_id:
+def encerrar_sessao(session_id, user_id="user_test", kitchen_id=1):
+    identifier = doc_id_da_sessao(session_id, user_id, kitchen_id)
+    if not identifier:
         return ""
-
-    doc = col_sessoes.find_one({"_id": doc_id})
-
-    sessoes_ativas.pop(session_id, None)
-
+    doc = col_sessoes.find_one(
+        {"_id": identifier, "user_id": user_id, "kitchen_id": kitchen_id}
+    )
     if not doc or not doc.get("messages"):
         return ""
-
-    resumo = gerar_resumo(doc["messages"])
-
+    summary = gerar_resumo(doc["messages"])
     col_sessoes.update_one(
-        {"_id": doc_id},
-        {"$set": {"summary": resumo, "updated_at": agora()}}
+        {"_id": identifier, "user_id": user_id, "kitchen_id": kitchen_id},
+        {"$set": {"summary": summary, "active": False, "updated_at": agora()}},
     )
+    return summary
 
-    return resumo
 
-def recuperar_historico(user_id: str, busca: str = "", limite: int = 10) -> list[SessaoResumo]:
-    filtro = {"user_id": user_id, "summary": {"$nin": ["", None]}}
-    docs = (
-        col_sessoes
-        .find(filtro, {"summary": 1, "started_at": 1})
+def recuperar_historico(user_id, busca="", limite=10, kitchen_id=1):
+    rows = list(
+        col_sessoes.find(
+            {
+                "user_id": user_id,
+                "kitchen_id": kitchen_id,
+                "summary": {"$nin": ["", None]},
+            }
+        )
         .sort("started_at", -1)
-        .limit(limite)
+        .limit(200)
     )
-
+    if busca.strip():
+        rows = [rows[i] for i, _ in rank(busca, [d["summary"] for d in rows], limite)]
     return [
-        SessaoResumo(doc_id=doc["_id"], started_at=doc["started_at"], summary=doc["summary"])
-        for doc in docs
+        SessaoResumo(doc_id=d["_id"], started_at=d["started_at"], summary=d["summary"])
+        for d in rows[:limite]
     ]
 
-def recuperar_mensagem(doc_id: str) -> list[MensagemHistorico]:
-    doc = col_sessoes.find_one({"_id": doc_id}, {"messages": 1})
+
+def recuperar_mensagem(doc_id, user_id=None, kitchen_id=1):
+    if user_id is None:
+        raise HTTPException(401, "Identidade necessária para recuperar mensagens.")
+    filtro = {"_id": doc_id, "user_id": user_id, "kitchen_id": kitchen_id}
+    doc = col_sessoes.find_one(filtro, {"messages": 1})
     if not doc:
         return []
     return [
@@ -151,3 +155,8 @@ def recuperar_mensagem(doc_id: str) -> list[MensagemHistorico]:
         for m in doc["messages"]
         if m["role"] != "judge"
     ]
+
+
+def mensagens_ativas(session_id, user_id, kitchen_id):
+    identifier = doc_id_da_sessao(session_id, user_id, kitchen_id)
+    return recuperar_mensagem(identifier, user_id, kitchen_id) if identifier else []

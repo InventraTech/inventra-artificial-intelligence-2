@@ -7,7 +7,7 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
 WORKDIR /app
 
 RUN apk add --no-cache --virtual .build-deps \
-    gcc musl-dev libffi-dev postgresql-dev
+    gcc musl-dev libffi-dev
 
 COPY requirements.txt .
 RUN python -m venv /opt/venv && /opt/venv/bin/pip install --no-cache-dir -r requirements.txt
@@ -15,8 +15,7 @@ RUN python -m venv /opt/venv && /opt/venv/bin/pip install --no-cache-dir -r requ
 # ---- imagem final ----
 FROM python:3.12-alpine
 
-RUN apk add --no-cache libpq && \
-    apk upgrade --no-cache
+RUN apk upgrade --no-cache
 
 WORKDIR /app
 COPY --from=builder /opt/venv /opt/venv

@@ -1,24 +1,23 @@
-from langchain_community.document_loaders import JSONLoader
+import json
+
 from langchain_core.tools import tool
 
 from iai.app.config import FAQ_PATH
+from iai.app.retrieval import rank
 
 
 @tool
 def faq_retriever(question: str) -> str:
-    """Busca no FAQ oficial do Inventra a resposta para a pergunta fornecida."""
-    loader = JSONLoader(
-        file_path=FAQ_PATH,
-        jq_schema=".",
-        content_key="p",
-        metadata_func=lambda record, metadata: {
-            **metadata, "resposta": record.get("r")
-            },
-        json_lines=True,
-    )
-    documentos = loader.load()
-
-    return "\n".join(
-        f"P: {documento.page_content}\nR: {documento.metadata['resposta']}"
-        for documento in documentos
-    )
+    """Recupera até quatro entradas relevantes por busca textual no FAQ versionado."""
+    try:
+        with open(FAQ_PATH, encoding="utf-8") as source:
+            entries = [json.loads(line) for line in source if line.strip()]
+        matches = rank(question, [entry["p"] + " " + entry["r"] for entry in entries])
+        if not matches:
+            return "Nenhuma informação documental relevante encontrada. Não invente uma resposta."
+        return "\n\n".join(
+            f"Fonte: faq_inventra.jsonl:{i + 1}\nP: {entries[i]['p']}\nR: {entries[i]['r']}"
+            for i, _ in matches
+        )
+    except (OSError, ValueError, KeyError):
+        return "Base documental indisponível ou inválida. Não invente a resposta."

@@ -77,7 +77,9 @@ def test_ultima_mensagem_ai_sem_nenhuma_retorna_none():
 def test_avaliar_alucinacao_retorna_resultado_do_chain(monkeypatch):
     resultado_fake = ResultadoJuiz(confianca=0.9, motivo="dados batem com os fatos")
     monkeypatch.setattr(
-        judge_module, "juiz_chain", SimpleNamespace(invoke=lambda _entrada: resultado_fake)
+        judge_module,
+        "juiz_chain",
+        SimpleNamespace(invoke=lambda _entrada: resultado_fake),
     )
     resultado = avaliar_alucinacao("pergunta", "fatos", "resposta")
     assert resultado == resultado_fake

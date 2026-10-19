@@ -12,12 +12,12 @@ from pymongo.errors import PyMongoError
 
 from iai.app.config import (
     CENARIOS_USUARIOS_SEMANAIS,
+    LLM_MODE,
     PERIODOS,
     PRECOS_MODELOS_USD_POR_MILHAO,
     REQUISICOES_POR_USUARIO_SEMANA,
     VALOR_POR_RESOLUCAO_USD,
 )
-from iai.app.memory import db
 from iai.app.schemas import (
     Cenario,
     Custo,
@@ -30,13 +30,10 @@ from iai.app.schemas import (
     Resolucao,
     Roi,
 )
+from iai.app.storage import CollectionProxy
 
-col_metricas = db["metrics"]
-
-try:
-    col_metricas.create_index([("timestamp", -1)])
-except PyMongoError:
-    pass
+# Sem I/O no import; o índice é criado em storage.initialize_storage.
+col_metricas = CollectionProxy("metrics")
 
 PREFIXOS_GUARDRAIL_ENTRADA = ("guardrail_insulto:", "guardrail_escopo:")
 
@@ -140,18 +137,23 @@ def registrar_requisicao(
     coletor: ColetorMetricas,
     inicio: float,
     session_id: str,
-    user_id: str,
+    identity: Any,
     estado_final: dict | None,
     falhou: bool,
+    error_type: str | None = None,
 ) -> None:
-    """Persiste o turno. Nunca propaga erro: métrica não pode derrubar o chat."""
-    agentes = coletor.agentes_chamados
+    """Persiste o turno. Nunca propaga erro: métrica não pode derrubar o chat.
+
+    Guarda só dados técnicos (latência, tokens, custo, nomes de agentes); nunca o
+    conteúdo da conversa nem o motivo do juiz."""
+    agentes = (estado_final or {}).get("agentes_chamados") or coletor.agentes_chamados
     status = status_da_requisicao(agentes, falhou)
     try:
         col_metricas.insert_one({
             "timestamp":         datetime.now(UTC),
             "session_id":        session_id,
-            "user_id":           user_id,
+            "user_id":           identity.user_id,
+            "kitchen_id":        identity.kitchen_id,
             "latencia_total_ms": round((perf_counter() - inicio) * 1000, 1),
             "status":            status,
             "nos":               coletor.nos,
@@ -161,7 +163,9 @@ def registrar_requisicao(
             "custo_usd":         sum(c["custo_usd"] for c in coletor.chamadas),
             "erros_componentes": coletor.erros,
             "resolvida":         status == "ok" and foi_resolvida(agentes),
-            "agentes_chamados":  agentes,
+            "agentes_chamados":  [str(a).split(":")[0] for a in agentes],
+            "llm_mode":          LLM_MODE,
+            "error_type":        error_type,
         })
     except PyMongoError:
         pass
@@ -186,15 +190,22 @@ def _razao(numerador: float, denominador: float) -> float | None:
 def gerar_metricas(
     periodo: Literal["semana", "mes"] = "semana",
     usuarios: Sequence[int] | None = None,
+    identity: Any = None,
 ) -> MetricasResponse:
     """
     Métricas de observabilidade/SRE. `periodo` define a janela de histórico observada
     (semana = 7 dias, mes = 30) e o horizonte da projeção de custo. `usuarios` define os
-    cenários de usuários semanais (padrão: 100 e 1000).
+    cenários de usuários semanais (padrão: 100 e 1000). Com `identity`, só conta a cozinha
+    do usuário; quem não é SUPERVISOR vê apenas as próprias requisições.
     """
     dias, semanas = PERIODOS[periodo]
     desde = datetime.now(UTC) - timedelta(days=dias)
-    turnos = list(col_metricas.find({"timestamp": {"$gte": desde}}))
+    filtro: dict[str, Any] = {"timestamp": {"$gte": desde}}
+    if identity is not None:
+        filtro["kitchen_id"] = identity.kitchen_id
+        if identity.role != "SUPERVISOR":
+            filtro["user_id"] = identity.user_id
+    turnos = list(col_metricas.find(filtro))
     total = len(turnos)
 
     latencias = [t["latencia_total_ms"] for t in turnos]

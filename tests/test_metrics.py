@@ -7,6 +7,9 @@ from langchain_core.messages import AIMessage
 from langchain_core.outputs import ChatGeneration, LLMResult
 
 import iai.app.metrics as m
+from tests_helpers import context_for
+
+AUTH = {"Authorization": "Bearer demo-supervisor"}
 
 
 def _turno(custo=0.01, status="ok", resolvida=True, erros_componentes=None, ms=1000.0):
@@ -153,15 +156,50 @@ def test_rota_metrics_valida_parametros(turnos_exemplo):
 
     cliente = TestClient(app)
 
-    corpo = cliente.get("/metrics?periodo=mes&usuarios=50&usuarios=5000").json()
+    corpo = cliente.get("/metrics?periodo=mes&usuarios=50&usuarios=5000", headers=AUTH).json()
     assert corpo["periodo"] == "mes"
     assert [c["usuarios"] for c in corpo["cenarios"]] == [50, 5000]
-    assert cliente.get("/metrics?periodo=ano").status_code == 422
-    assert cliente.get("/metrics?usuarios=0").status_code == 422
+    assert cliente.get("/metrics?periodo=ano", headers=AUTH).status_code == 422
+    assert cliente.get("/metrics?usuarios=0", headers=AUTH).status_code == 422
 
 
 def test_cors_libera_origem_do_front(turnos_exemplo):
     from iai.app.main import app
 
-    resposta = TestClient(app).get("/metrics", headers={"Origin": "http://localhost:3000"})
+    resposta = TestClient(app).get(
+        "/metrics", headers={**AUTH, "Origin": "http://localhost:3000"}
+    )
     assert resposta.headers["access-control-allow-origin"] == "http://localhost:3000"
+
+
+def test_metrics_exige_autenticacao(turnos_exemplo):
+    from iai.app.main import app
+
+    assert TestClient(app).get("/metrics").status_code == 401
+
+
+def test_metrics_filtra_por_cozinha_e_papel(turnos_exemplo):
+    m.gerar_metricas(identity=context_for("demo-estoquista").identity)
+    m.gerar_metricas(identity=context_for("demo-supervisor").identity)
+
+    estoquista, supervisor = turnos_exemplo.filtros
+    assert estoquista["kitchen_id"] == 1 and estoquista["user_id"] == "demo-estoquista"
+    assert supervisor["kitchen_id"] == 1 and "user_id" not in supervisor
+
+
+def test_registro_guarda_so_dados_tecnicos(monkeypatch):
+    from iai.app.storage import get_db
+
+    identity = context_for("demo-comprador").identity
+    m.registrar_requisicao(
+        m.ColetorMetricas(),
+        0.0,
+        "sessao",
+        identity,
+        {"agentes_chamados": ["juiz:reprovado:motivo-privado", "juiz:aprovado"]},
+        falhou=False,
+    )
+    doc = get_db().metrics.find_one({"user_id": identity.user_id})
+    assert doc["kitchen_id"] == identity.kitchen_id
+    assert doc["agentes_chamados"] == ["juiz", "juiz"]
+    assert "motivo-privado" not in str(doc)

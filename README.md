@@ -1,214 +1,190 @@
-# Inteligência Artificial do Inventra
+# IAI INVENTRA
 
-IA multiagente para o app **Inventra**, exposta como serviço HTTP (FastAPI), seguindo a arquitetura:
+FastAPI + LangChain + LangGraph para conhecimento documental, consultas operacionais e
+propostas de alteração aprovadas por Supervisor. Esta branch não altera Spring nem frontend.
 
-```
-User
-  -> Guardrail Insulto (termos proibidos / prompt injection / anonimiza PII / modelo de moderação)
-       -> [bloqueado] Parar resposta
-       -> [ok] -> Guardrail Escopo (pergunta pertence ao Inventra?)
-                    -> [bloqueado] Parar resposta
-                    -> [ok] -> Roteador -> Agente do cargo:
-                                             Estoquista
-                                             Comprador
-                                             Supervisor
-                                             FAQ
-                                               -> Juiz (confere a resposta contra os fatos que o agente achou)
-                                                    -> [reprovado, confiança < 0.7] volta pro mesmo agente (até 3x)
-                                                    -> [aprovado] -> Orquestrador* -> Guardrail Saída -> User
+## Executar localmente
 
-  * FAQ pula o Orquestrador e vai direto pro Guardrail Saída
+Use Python 3.12 em um ambiente virtual. No Windows, o comando `python` pode
+apontar para outra versão; por isso selecione `py -3.12` ao criar o ambiente.
+Se essa versão não estiver instalada, use `py install 3.12` no gerenciador Python.
+Copie `iai/.env.example` para `iai/.env` para habilitar **explicitamente a demonstração**:
+
+```powershell
+py -3.12 -m venv .venv
+.\.venv\Scripts\python.exe -m pip install -r requirements.txt
+if (-not (Test-Path iai/.env)) { Copy-Item iai/.env.example iai/.env }
+.\.venv\Scripts\python.exe -m uvicorn iai.app.main:app --host 127.0.0.1 --port 8000
 ```
 
-## Estrutura de pastas
+Não sobrescreva um `.env` existente. A demonstração usa usuários fixos, estoque de
+exemplo, Mongo simulado em memória e intérprete limitado sem provedores de IA.
+Ela não é autenticação real, não consulta estoque real e perde dados ao reiniciar.
 
-```
-inventra-ai-2/
-├── iai/
-│   ├── .env                    # variáveis de ambiente locais (não versionado)
-│   ├── data/
-│   │   └── faq_inventra.jsonl  # base de conhecimento do agente FAQ (pares pergunta/resposta)
-│   └── app/
-│       ├── main.py             # app FastAPI: monta rotas e expõe GET /health
-│       ├── config.py           # lê o .env, expõe GEMINI_API_KEY/GROQ_API_KEY/MONGO_CONNECTION (SecretStr) e FAQ_PATH
-│       ├── llms.py             # instancia os modelos (Gemini via llm_especialista, Groq via llm_rapido e llm_guardrail)
-│       ├── schemas.py          # Estado do grafo (Estado), ChatRequest/ChatResponse, ResultadoGuardrail, ResultadoJuiz, schemas de sessão/histórico
-│       ├── guardrail.py        # guardrail_insulto, guardrail_escopo, guardrail_saida, anonimizar_entrada (PII)
-│       ├── judge.py            # agente juiz: avaliar_alucinacao confere a resposta do especialista contra os fatos (tools) da rodada
-│       ├── prompts.py          # system prompts de cada agente/etapa
-│       ├── graph.py            # monta o grafo (LangGraph) e expõe executar_fluxo_assessor
-│       ├── metrics.py          # observabilidade/SRE: ColetorMetricas (callback por requisição), custo por tokens, gerar_metricas
-│       ├── memory.py           # persiste chats no Mongo: salvar_mensagem, salvar_mensagem_juiz, encerrar_sessao (gera resumo via LLM), recuperar_historico/recuperar_mensagem
-│       ├── tools/
-│       │   ├── faq.py          # tool faq_retriever: lê faq_inventra.jsonl via JSONLoader
-│       │   └── memoria.py      # tool buscar_historico: consulta resumos de sessões anteriores do mesmo user_id
-│       └── routes/
-│           ├── metrics.py      # GET /metrics?periodo=semana|mes&usuarios=... (contrato para o front React)
-│           └── chat.py         # POST /chat, POST /chat/encerrar, GET /chat/historico/{user_id}, GET /chat/mensagens/{doc_id}
-├── tests/
-│   ├── test_guardrail.py
-│   ├── test_graph.py
-│   ├── test_judge.py
-│   ├── test_memory.py
-│   ├── test_metrics.py
-│   └── test_faq.py
-├── conftest.py                 # env vars dummy para rodar os testes sem credenciais reais
-├── pytest.ini                  # pythonpath=. (necessário pois não há __init__.py em iai/)
-├── requirements.txt
-├── requirements-dev.txt        # ruff, mypy, pytest, pytest-cov, pip-audit
-├── mypy.ini
-└── Dockerfile
-```
+Use o executável de `.venv` também ao instalar dependências adicionais ou executar
+testes. Não é necessário ativar o ambiente nem alterar a política do PowerShell.
+Se aparecer `pg_config` ou uma exigência de compilador C++ durante a instalação,
+verifique a versão do Python e o arquivo de requisitos: a IAI não utiliza `jq` nem
+`psycopg2-binary`, e o acesso operacional ao PostgreSQL é feito pela API Spring.
 
-Cada cargo é atendido por um agente próprio (persona e tools isoladas), montado com
-`create_agent` (LangChain); o Roteador decide qual agente chamar a partir da última
-mensagem do usuário, e o Orquestrador formata a resposta final antes do guardrail de saída.
-
-## Como rodar
-
-1. Crie o arquivo `iai/.env` com as chaves necessárias:
-   ```
-   GEMINI_API_KEY=...
-   GROQ_API_KEY=...
-   MONGO_CONNECTION=mongodb+srv://usuario:senha@cluster.mongodb.net/
-   # opcional — traces no LangSmith
-   LANGCHAIN_TRACING_V2=true
-   LANGCHAIN_API_KEY=...
-   LANGCHAIN_PROJECT=...
-   # opcionais — métricas (/metrics) e CORS do front
-   METRICAS_REQ_USUARIO_SEMANA=10
-   METRICAS_VALOR_RESOLUCAO_USD=1.50
-   CORS_ORIGINS=http://localhost:3000,http://localhost:5173
-   ```
-   (repare que o `.env` fica dentro de `iai/`, não na raiz do projeto — é onde `config.py` procura.)
-2. Instale as dependências:
-   ```
-   pip install -r requirements.txt
-   ```
-3. Suba o servidor (`--host 0.0.0.0` permite acessar de outro aparelho na mesma rede; para só o PC, use `127.0.0.1`):
-   ```
-   python -m uvicorn iai.app.main:app --host 0.0.0.0 --port 8000 --reload
-   ```
-4. Com o servidor no ar:
-   - `GET http://127.0.0.1:8000/health` → `{"status": "ok"}`
-   - `POST http://127.0.0.1:8000/chat` com corpo `{"session_id": "teste", "user_id": "user1", "pergunta": "quantos tomates temos em estoque?"}` → resposta do fluxo de agentes (a mensagem e a resposta já ficam salvas no Mongo)
-   - `POST http://127.0.0.1:8000/chat/audio` (multipart: `session_id`, `user_id` e o arquivo `audio` em webm, ogg, mp3, m4a, mp4 ou wav, até 10 MB) → transcreve com Whisper (Groq) e segue o mesmo fluxo do `/chat`; devolve `{"transcricao": "...", "resposta": "..."}`
-   - `POST http://127.0.0.1:8000/chat/encerrar` com `{"session_id": "teste"}` → encerra a sessão e gera um resumo da conversa via LLM
-   - `GET http://127.0.0.1:8000/chat/historico/{user_id}` → lista as sessões já encerradas desse usuário (resumo + data)
-   - `GET http://127.0.0.1:8000/chat/mensagens/{doc_id}` → mensagens completas de uma sessão (o `doc_id` vem do histórico acima)
+Para persistir solicitações e histórico (identidade e dados de negócio ainda simulados),
+use `IAI_STORAGE_MODE=mongo` e `MONGO_CONNECTION` apontando para um MongoDB.
 
 ### Testar no celular (mesma rede Wi-Fi)
 
-1. Suba o servidor com `--host 0.0.0.0` (passo 3).
+1. Suba o servidor com `--host 0.0.0.0` em vez de `127.0.0.1`.
 2. Descubra o IP do PC (PowerShell):
-   ```
+   ```powershell
    (Get-NetIPAddress -AddressFamily IPv4 | Where-Object { $_.InterfaceAlias -match "Wi-Fi|Ethernet" }).IPAddress
    ```
-3. No celular, abra `http://<IP-do-PC>:8000/docs` (Swagger). Para testar o áudio, use `POST /chat/audio` e escolha ou grave um arquivo no campo `audio`.
-4. Se não abrir, libere a porta no firewall do Windows (PowerShell como administrador):
-   ```
+3. No celular, abra `http://<IP-do-PC>:8000/docs` e use **Authorize** com o token do perfil
+   (`demo-estoquista`, `demo-comprador` ou `demo-supervisor`) para testar cada cargo.
+4. Se não abrir, libere a porta (PowerShell como administrador):
+   ```powershell
    New-NetFirewallRule -DisplayName "IAI 8000" -Direction Inbound -Protocol TCP -LocalPort 8000 -Action Allow -Profile Private
    ```
-   Redes que isolam os aparelhos (comum em Wi-Fi corporativo) bloqueiam o acesso: use o hotspot do celular ou um túnel (`ngrok http 8000`).
+   Redes que isolam aparelhos (comum em Wi-Fi corporativo) bloqueiam o acesso: use o hotspot do
+   celular ou um túnel (`ngrok http 8000`). Não exponha `0.0.0.0` em rede pública no modo demo.
 
-Não exponha `0.0.0.0` em rede pública: o `/chat` não exige autenticação.
+Documentação interativa: `http://127.0.0.1:8000/docs`.
+Estado/configuração: `GET /health`; modos também aparecem nos cabeçalhos `X-IAI-*`.
 
-## Docker
+## Identidade demonstrativa
 
-```bash
-docker build -t inventra-ai .
-docker run -p 8000:8000 --env-file iai/.env inventra-ai
+Use `Authorization: Bearer <identificador-demo>`:
+
+| Identificador | Papel | Cozinha |
+|---|---|---|
+| demo-estoquista | Estoquista | 1 |
+| demo-comprador | Comprador | 1 |
+| demo-supervisor | Supervisor | 1 |
+| demo-outra-cozinha | Supervisor | 2 |
+
+Esses identificadores são **dados públicos de exemplo**, não credenciais de produção.
+Não exponha os modos mock publicamente.
+
+## Chat e consultas
+
+`POST /chat` preserva `session_id`, `user_id`, `pergunta` e resposta `{"resposta": "..."}`.
+O `user_id` deve corresponder à identidade autenticada. `request_id` opcional pode ser
+reutilizado pelo frontend ao repetir a mesma requisição; é a chave da rodada para propostas.
+
+```json
+{
+  "session_id": "cozinha-1-chat",
+  "user_id": "demo-estoquista",
+  "request_id": "mensagem-001",
+  "pergunta": "Fiz um almoço usando 10 kg de arroz e 40 kg de carne."
+}
 ```
+
+No demo, esse exemplo gera duas propostas. O saldo permanece igual até aprovação.
+Esse intérprete tem cobertura limitada; compreensão geral de linguagem natural usa os
+agentes `IAI_LLM_MODE=live` e chaves Gemini/Groq. API de negócio e armazenamento podem
+continuar simulados enquanto se valida o provedor real.
+
+`POST /chat/audio` (multipart: `session_id`, `user_id`, `request_id` opcional e o arquivo
+`audio` em webm, ogg, mp3, m4a, mp4 ou wav, até 10 MB) transcreve a fala com Whisper
+(`whisper-large-v3-turbo`, Groq) e segue o mesmo fluxo e a mesma autenticação do `/chat`.
+Responde `{"transcricao": "...", "resposta": "..."}`. Exige `GROQ_API_KEY`; o áudio não é
+gravado, só o texto transcrito entra no histórico.
+
+`POST /queries` oferece as mesmas consultas tipadas sem depender de LLM.
+Exemplo: `{"resource":"validade","days":7}`.
+`GET /queries/capabilities` informa schemas, operações e limitações.
+
+## Tools por agente
+
+O roteador escolhe o agente pela intenção da mensagem; as tools de cada agente e quem pode
+propor cada operação (`ROLE_OPERATIONS`) estão em `GET /queries/capabilities`
+(`agents` e `operations[].allowed_roles`).
+
+| Agente | Tools |
+|---|---|
+| Roteador | `buscar_historico` |
+| FAQ | `faq_retriever` |
+| Estoquista | `consultar_inventra`, `consultar_solicitacoes_iai`, `buscar_historico`, `faq_retriever` + propor: criar lote, registrar entrada, registrar saída, ajustar estoque, registrar inventário, registrar contagem, alterar contagem |
+| Comprador | as mesmas de consulta/histórico/FAQ + propor: criar requisição, adicionar/remover item, cancelar requisição, cadastrar/desativar fornecedor |
+| Supervisor | todas as anteriores + propor: criar/editar/desativar produto |
+
+`consultar_inventra` é uma única tool com o parâmetro `resource` (produtos, estoque, lotes,
+validade, fornecedores, requisições, inventários, alertas, catálogos etc.). Nenhuma tool aprova
+ou executa: as `propor_*` só criam propostas.
+
+## Aprovação
+
+1. Proposta criada por ferramenta do agente ou `POST /approvals`.
+2. Supervisor vê `GET /approvals/inbox`, restrito à sua cozinha.
+3. Envia `POST /approvals/{id}/decision` com decisão e hash da proposta.
+4. Execução única quando disponível. Resultado mock continua explicitamente identificado.
+5. Solicitante acompanha `GET /approvals/{id}` ou listagem de suas solicitações.
+
+Quem pode **propor** o quê (chat ou `POST /approvals`; fora disso, 403):
+estoquista → lotes, entradas, saídas, ajustes, inventários e contagens; comprador →
+requisições e fornecedores; supervisor → tudo, inclusive produtos. O mapa fica em
+`ROLE_OPERATIONS` (`domain.py`) e aparece em `GET /queries/capabilities` (`allowed_roles`).
+A API Spring continua aplicando as próprias permissões na execução.
+
+Prazo: 7 dias. Autoaprovação de Supervisor da mesma cozinha é permitida.
+Nenhuma tool do modelo aprova ou executa. Não há exclusão física pela IAI.
+Operações em itens/lotes distintos são propostas independentes, sem atomicidade de grupo.
+
+## Modos reais e dependências
+
+Por padrão, sem configuração demo, os modos são `spring/spring/mongo/live`.
+Configure em ambiente ou `iai/.env`:
+
+| Variável | Uso |
+|---|---|
+| IAI_AUTH_MODE | mock ou spring |
+| IAI_BUSINESS_MODE | mock ou spring |
+| IAI_STORAGE_MODE | mock ou mongo |
+| IAI_LLM_MODE | demo ou live |
+| INVENTRA_API_URL | base Spring, localhost em HTTP ou endereço remoto HTTPS |
+| INVENTRA_HTTP_TIMEOUT | segundos; padrão 10 |
+| MONGO_CONNECTION | MongoDB; não inclua credenciais no Git |
+| GEMINI_API_KEY / GROQ_API_KEY | provedores para agentes live |
+| CORS_ORIGINS | origens exatas do frontend, separadas por vírgula (padrão `http://localhost:3000,http://localhost:5173`) |
+| METRICAS_REQ_USUARIO_SEMANA / METRICAS_VALOR_RESOLUCAO_USD | premissas do `/metrics` (padrão 10 e 1.50) |
+
+API real não aceita identidade mock. JWT é validado por `GET /api/users/me`, sem
+decodificação não verificada e sem segredo de assinatura compartilhado. Tokens permanecem
+apenas no contexto HTTP; não são colocados em prompts, checkpoints ou histórico.
+
+A execução real como outro solicitante depende de delegação ainda ausente no Spring.
+A aprovação permanece `APROVADA_PENDENTE_INTEGRACAO`. O solicitante pode apresentar
+JWT fresco em `POST /approvals/{id}/execute`; a API volta a aplicar suas permissões.
+Edição de contagem e remoção lógica de item também têm dependências externas.
+Não inventamos endpoints para essas capacidades.
+
+Uma falha após iniciar envio pode ser `RESULTADO_INCERTO`. A IAI não repete a escrita.
+Reconciliação/idempotência completa entre serviços depende do backend.
+A página de aprovação está em outro repositório e não foi criada aqui.
 
 ## Testes
 
-```bash
-pip install -r requirements-dev.txt
-pytest --cov=. --cov-report=term-missing --cov-fail-under=70
+```powershell
+.\.venv\Scripts\python.exe -m pip install -r requirements-dev.txt
+.\.venv\Scripts\python.exe -m pytest --cov=iai --cov-report=term-missing --cov-fail-under=70
+.\.venv\Scripts\python.exe -m ruff check iai
+.\.venv\Scripts\python.exe -m mypy iai --follow-imports=skip
 ```
 
-Os testes não precisam de `GEMINI_API_KEY`/`GROQ_API_KEY` reais: o `conftest.py` na raiz
-preenche valores dummy quando essas variáveis não existem no ambiente, só o suficiente
-para os módulos importarem sem erro. A maioria dos testes é assim — determinística, sem
-chamar a LLM de verdade.
+Os testes comuns usam Mongo/dados/identidades simulados. O grafo também é exercitado com
+agentes LangChain e um modelo roteirizado; isso não mede a qualidade de Gemini/Groq.
+Testes opcionais, somente com serviços explicitamente disponibilizados:
 
-`tests/test_faq.py` tem duas exceções que rodam o fluxo completo (roteador + agente FAQ)
-contra o Gemini/Groq de verdade, para validar que o agente escolhe a resposta certa da
-base de conhecimento mesmo quando a pergunta não é idêntica ao FAQ. Elas ficam `skipped`
-por padrão (inclusive no CI, que não tem essas chaves como secret) e só rodam com
-`RUN_LLM_TESTS=1` e as chaves reais exportadas no ambiente antes do pytest iniciar:
+- `RUN_LLM_TESTS=1` e chaves reais: FAQ pelos provedores, negócio/Mongo continuam mockados.
+- `RUN_MONGO_TESTS=1` e `MONGO_TEST_CONNECTION`: persistência e decisão atômica em base
+  temporária exclusiva `iai_test_<uuid>`; não usa `dbIAI`.
+- `RUN_SPRING_TESTS=1` e `SPRING_TEST_TOKEN`: leitura de identidade/catálogo real, sem escrita.
 
-```bash
-set -a && source iai/.env && set +a && RUN_LLM_TESTS=1 pytest tests/test_faq.py
-```
-
-## Notas de design
-
-- A entrada passa por **dois guardrails em sequência**, cada um como node próprio do grafo:
-  1. **`guardrail_insulto`**: primeiro filtra tentativas clássicas de jailbreak/prompt
-     injection (PT e EN) por regex sobre o texto normalizado (sem acento, minúsculo —
-     `normalizar_texto`), bloqueio imediato e sem custo de LLM. Se passar, anonimiza PII
-     antes de mandar pro modelo de moderação `openai/gpt-oss-safeguard-20b`
-     (`llm_guardrail`), que identifica insultos/abuso.
-  2. **`guardrail_escopo`**: só roda se o primeiro aprovar; usa `llm_rapido` para classificar
-     se a mensagem (já anonimizada) pertence ao escopo do Inventra.
-  Bloqueio em qualquer um dos dois guardrails encerra o fluxo direto pro usuário, sem passar
-  pelo roteador.
-- A anonimização de PII (`anonimizar_entrada`, chamada dentro do `guardrail_insulto`) cobre
-  e-mail, CPF, RG e telefone; os padrões regex ficam centralizados em `PADROES_PII` no topo
-  de `guardrail.py`. O **Guardrail de saída** restaura os dados originais na resposta final,
-  já que o modelo só viu os tokens anonimizados durante o processamento.
-- O agente **FAQ** não tem tools de banco de dados — só orienta sobre funcionalidades e
-  contatos do app, usando a tool `faq_retriever` (`iai/app/tools/faq.py`), que carrega a
-  base de perguntas e respostas de `iai/data/faq_inventra.jsonl` via `JSONLoader` e deixa
-  o próprio LLM escolher a entrada que melhor responde à pergunta do usuário.
-- `llm_rapido` (Groq) atende roteamento, orquestração, guardrail de escopo e o agente
-  FAQ — chamadas rápidas e baratas. `llm_guardrail` (Groq, `gpt-oss-safeguard-20b`) atende
-  só o guardrail de insulto/moderação. `llm_especialista` (Gemini) atende os agentes de
-  cargo (Estoquista, Comprador, Supervisor), que fazem tool-calling mais complexo.
-- **Persistência de chat** (`memory.py`): toda mensagem trocada em `/chat` é salva na
-  coleção `dbIAI.sessions` do Mongo, vinculada a `session_id`/`user_id`. Uma sessão fica
-  "ativa" (sem `summary`) até alguém chamar `/chat/encerrar`, que lê as mensagens salvas e
-  pede pro `llm_rapido` gerar um resumo curto da conversa. É esse fechamento explícito —
-  chamado pelo app quando o usuário sai do chat — que separa uma sessão da próxima com o
-  mesmo `session_id`; não há expiração automática por tempo. Importante: isso é o *log* da
-  conversa, não o estado usado pelo LangGraph pra responder — esse continua no `MemorySaver`
-  (`graph.py`), que é em memória e some a cada restart do processo.
-- **Juiz de alucinação** (`judge.py`): depois que um agente de cargo (Estoquista,
-  Comprador, Supervisor ou FAQ) responde, o node `juiz` audita essa resposta antes de
-  deixá-la seguir pro Orquestrador. Ele reúne, a partir das mensagens da rodada atual, a
-  pergunta original do usuário, os `ToolMessage`s que o agente recebeu (os "fatos" —
-  dado bruto do estoque, do FAQ, etc.) e a resposta do agente; manda tudo pro `llm_rapido`
-  com saída estruturada (`ResultadoJuiz`: `confianca` de 0.0 a 1.0 + `motivo`). A partir de
-  `LIMIAR_CONFIANCA_JUIZ = 0.7` a resposta é aprovada; abaixo disso, o juiz injeta uma
-  mensagem de correção (só com o `motivo`, nunca a nota) de volta pro mesmo agente, que
-  tenta de novo — até `MAX_TENTATIVAS_JUIZ = 3` vezes, depois desiste e substitui a
-  resposta por um fallback seguro ("não consegui confirmar essa informação..."). Quando
-  nenhuma tool foi chamada na rodada (fatos vazios), o juiz **não pula a validação** — é
-  tratado como um fato a mais (`FATOS_VAZIOS`) e mandado pro LLM avaliar, porque um agente
-  afirmar que executou uma ação sem ter chamado a tool é o caso mais perigoso de
-  alucinação. Toda reprovação (não a aprovação) é gravada na própria sessão do Mongo como
-  uma mensagem de `role: "judge"` (com `motivo` e `confianca`), só para auditoria — essas
-  mensagens são filtradas do resumo da conversa (`gerar_resumo`) e do histórico devolvido
-  por `GET /chat/mensagens/{doc_id}`.
-- **Memória de longo prazo** (`tools/memoria.py`): a tool `buscar_historico` consulta, via
-  `recuperar_historico`, os resumos já gerados (sessões encerradas) do **mesmo `user_id`** —
-  não do `session_id` atual, então uma sessão nova do mesmo usuário enxerga o que ele
-  perguntou em sessões passadas, mas um `user_id` diferente nunca vê o histórico de outro.
-  O Roteador e os três agentes de cargo (Estoquista, Comprador, Supervisor) recebem essa
-  tool; o `ROTEADOR_SYSTEM_PROMPT` instrui explicitamente quando usá-la (perguntas tipo "o
-  que eu perguntei da última vez?"), e o `GUARDRAIL_ENTRADA_SYSTEM_PROMPT` permite esse tipo
-  de pergunta passar mesmo sem citar estoque/compras. Pra tool conseguir identificar o
-  usuário, `executar_fluxo_assessor` propaga `user_id` (além de `thread_id`) no
-  `configurable` do grafo — sem isso a tool não sabe de quem buscar o histórico. Hoje o
-  `user_id` do `ChatRequest` é informado livremente pelo chamador da API, sem autenticação;
-  a garantia de isolamento por usuário depende de quem estiver na frente do IAI (app/gateway)
-  sempre mandar o `user_id` correto.
 
 ## Observabilidade e métricas SRE
 
 O backend só expõe os números; a tela é feita no front-end (React) por outra pessoa, consumindo
-`GET /metrics`. O contrato completo (campos, tipos e descrições) aparece em `/docs` (Swagger).
+`GET /metrics` (exige `Authorization: Bearer`; só considera a cozinha do usuário e, para quem não é
+SUPERVISOR, apenas as próprias requisições). O contrato completo (campos, tipos e descrições) aparece em `/docs` (Swagger).
 
 ```
 GET /metrics?periodo=semana            # padrão: histórico dos últimos 7 dias, projeção semanal
@@ -232,7 +208,7 @@ Fluxo dos dados:
 1. `metrics.py` → `ColetorMetricas` é um callback passado no `config` de cada `invoke` do grafo. Ele
    anota a latência de cada nó, cada chamada de LLM (modelo, tokens, custo, latência) e os erros de
    LLM/ferramenta. O texto do prompt **não** é guardado.
-2. `registrar_requisicao` grava um documento por requisição em `dbIAI.metrics` (Mongo). Falha ao
+2. `registrar_requisicao` grava um documento por requisição em `dbIAI.metrics` (Mongo), com `user_id` e `kitchen_id`, sem conteúdo da conversa. Falha ao
    gravar nunca derruba o chat.
 3. `GET /metrics` agrega esses documentos na janela do `periodo`.
 4. Com `LANGCHAIN_TRACING_V2=true`, cada `/chat` também vira um trace `iai_chat` no LangSmith (tag

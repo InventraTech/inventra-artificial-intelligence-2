@@ -1,13 +1,13 @@
 from time import perf_counter
+from typing import cast
 
 from langchain.agents import create_agent
 from langchain_core.messages import BaseMessage, HumanMessage, RemoveMessage
 from langchain_core.prompts import ChatPromptTemplate
 from langchain_core.runnables import RunnableConfig
-from langchain_core.tools import tool
-from langgraph.checkpoint.memory import MemorySaver
 from langgraph.graph import END, StateGraph
 
+from iai.app.config import BUSINESS_MODE, LLM_MODE
 from iai.app.guardrail import (
     anonimizar_entrada,
     guardrail_escopo,
@@ -23,7 +23,12 @@ from iai.app.judge import (
     ultima_mensagem_ai,
 )
 from iai.app.llms import llm_especialista, llm_rapido
-from iai.app.memory import iniciar_sessao, salvar_mensagem, salvar_mensagem_juiz
+from iai.app.memory import (
+    iniciar_sessao,
+    mensagens_ativas,
+    salvar_mensagem,
+    salvar_mensagem_juiz,
+)
 from iai.app.metrics import ColetorMetricas, registrar_requisicao
 from iai.app.prompts import (
     COMPRADOR_SYSTEM_PROMPT,
@@ -34,8 +39,10 @@ from iai.app.prompts import (
     SUPERVISOR_SYSTEM_PROMPT,
 )
 from iai.app.schemas import Estado
+from iai.app.security import context
 from iai.app.tools.faq import faq_retriever
 from iai.app.tools.memoria import TOOLS_MEMORIA
+from iai.app.tools.operational import BUY_TOOLS, STOCK_TOOLS, SUPERVISOR_TOOLS
 
 
 def extrair_texto(mensagem: BaseMessage) -> str:
@@ -51,58 +58,37 @@ def extrair_texto(mensagem: BaseMessage) -> str:
     return str(conteudo)
 
 
-@tool
-def consultar_estoque_mock(item: str) -> str:
-    """Consulta a quantidade e a validade de um item no estoque."""
-    if "tomate" in item.lower():
-        return "Temos 5kg de tomate. Validade: amanhã (Risco de desperdício alto)."
-    return f"Temos 10 unidades de {item} em estoque. Validade longa."
-
-@tool
-def criar_requisicao_mock(item: str, quantidade: int) -> str:
-    """Cria uma requisição de compra no sistema."""
-    return f"Requisição de {quantidade}x {item} criada com sucesso (ID: 998)."
-
-@tool
-def relatorio_desperdicio_mock() -> str:
-    """Gera um panorama de itens críticos."""
-    return "Relatório: 5kg de tomate vencem amanhã. 2L de leite vencem em 2 dias."
-
 router_app = create_agent(
-    model=llm_rapido,
-    tools=TOOLS_MEMORIA,
-    system_prompt=ROTEADOR_SYSTEM_PROMPT
+    model=llm_rapido, tools=TOOLS_MEMORIA, system_prompt=ROTEADOR_SYSTEM_PROMPT
 )
 
-orquestrador_prompt = ChatPromptTemplate.from_messages([
-    ("system", ORQUESTRADOR_SYSTEM_PROMPT), 
-    ("human", "{mensagens}")
-])
+orquestrador_prompt = ChatPromptTemplate.from_messages(
+    [("system", ORQUESTRADOR_SYSTEM_PROMPT), ("human", "{mensagens}")]
+)
 orquestrador_app = orquestrador_prompt | llm_rapido
 
 estoquista_app = create_agent(  # type: ignore[call-overload]
     model=llm_especialista,
-    tools=[consultar_estoque_mock] + TOOLS_MEMORIA,
-    system_prompt=ESTOQUISTA_SYSTEM_PROMPT
+    tools=STOCK_TOOLS + TOOLS_MEMORIA + [faq_retriever],
+    system_prompt=ESTOQUISTA_SYSTEM_PROMPT,
 )
 
 comprador_app = create_agent(  # type: ignore[call-overload]
     model=llm_especialista,
-    tools=[criar_requisicao_mock] + TOOLS_MEMORIA,
-    system_prompt=COMPRADOR_SYSTEM_PROMPT
+    tools=BUY_TOOLS + TOOLS_MEMORIA + [faq_retriever],
+    system_prompt=COMPRADOR_SYSTEM_PROMPT,
 )
 
 supervisor_app = create_agent(  # type: ignore[call-overload]
     model=llm_especialista,
-    tools=[relatorio_desperdicio_mock] + TOOLS_MEMORIA,
-    system_prompt=SUPERVISOR_SYSTEM_PROMPT
+    tools=SUPERVISOR_TOOLS + TOOLS_MEMORIA + [faq_retriever],
+    system_prompt=SUPERVISOR_SYSTEM_PROMPT,
 )
 
 faq_app = create_agent(
-    model=llm_rapido,
-    tools=[faq_retriever],
-    system_prompt=FAQ_SYSTEM_PROMPT
+    model=llm_rapido, tools=[faq_retriever], system_prompt=FAQ_SYSTEM_PROMPT
 )
+
 
 def no_guardrail_insulto(estado: Estado) -> dict:
     mensagem_original = list(estado["messages"])[-1]
@@ -113,10 +99,10 @@ def no_guardrail_insulto(estado: Estado) -> dict:
 
     if resultado["bloqueado"]:
         return {
-            "messages":         [{"role": "assistant", "content": resultado["mensagem"]}],
-            "rota":             "fim",
-            "mapa_pii":         mapa,
-            "agentes_chamados": [f"guardrail_insulto:{resultado['motivo']}"]
+            "messages": [{"role": "assistant", "content": resultado["mensagem"]}],
+            "rota": "fim",
+            "mapa_pii": mapa,
+            "agentes_chamados": [f"guardrail_insulto:{resultado['motivo']}"],
         }
 
     if mensagem_original.id is None:
@@ -125,11 +111,12 @@ def no_guardrail_insulto(estado: Estado) -> dict:
     return {
         "messages": [
             RemoveMessage(id=mensagem_original.id),
-            {"role": "human", "content": texto_anonimizado}
+            {"role": "human", "content": texto_anonimizado},
         ],
-        "mapa_pii":         mapa,
+        "mapa_pii": mapa,
         "agentes_chamados": ["guardrail_insulto:aprovado"],
     }
+
 
 def no_guardrail_escopo(estado: Estado) -> dict:
     texto = extrair_texto(estado["messages"][-1])
@@ -137,14 +124,15 @@ def no_guardrail_escopo(estado: Estado) -> dict:
 
     if resultado["bloqueado"]:
         return {
-            "messages":         [{"role": "assistant", "content": resultado["mensagem"]}],
-            "rota":             "fim",
-            "agentes_chamados": [f"guardrail_escopo:{resultado['motivo']}"]
+            "messages": [{"role": "assistant", "content": resultado["mensagem"]}],
+            "rota": "fim",
+            "agentes_chamados": [f"guardrail_escopo:{resultado['motivo']}"],
         }
 
     return {
         "agentes_chamados": ["guardrail_escopo:aprovado"],
     }
+
 
 def no_guardrail_saida(estado: Estado) -> dict:
     ultima = ""
@@ -156,21 +144,50 @@ def no_guardrail_saida(estado: Estado) -> dict:
     resultado = guardrail_saida(ultima, estado.get("mapa_pii"), {})
 
     return {
-       "messages":         [{"role": "assistant", "content": resultado["conteudo"]}],
-       "agentes_chamados": ["guardrail_saida"]
+        "messages": [{"role": "assistant", "content": resultado["conteudo"]}],
+        "agentes_chamados": ["guardrail_saida"],
     }
 
+
 def no_roteador(estado: Estado, config: RunnableConfig) -> dict:
-    ultima_mensagem = extrair_texto(estado["messages"][-1])
-    saida = router_app.invoke({"messages": [HumanMessage(content=ultima_mensagem)]}, config=config)
+    saida = router_app.invoke({"messages": list(estado["messages"])}, config=config)
 
     texto = extrair_texto(saida["messages"][-1])
 
     if "ROUTE=" not in texto:
+        from iai.app.guardrail import normalizar_texto
+
+        greeting = normalizar_texto(extrair_texto(estado["messages"][-1])).strip(
+            " .!?\n"
+        )
+        _, facts, _ = extrair_pergunta_fatos_e_resposta(saida["messages"])
+        if greeting not in {
+            "oi",
+            "ola",
+            "bom dia",
+            "boa tarde",
+            "boa noite",
+            "obrigado",
+            "obrigada",
+            "tudo bem",
+        } and (
+            not facts
+            or avaliar_alucinacao(
+                extrair_texto(estado["messages"][-1]), facts, texto
+            ).confianca
+            < LIMIAR_CONFIANCA_JUIZ
+        ):
+            # Falha de protocolo não vira resposta operacional sem evidência.
+            return {
+                "agentes_chamados": ["roteador:protocolo_invalido"],
+                "rota": "supervisor",
+            }
+        if not facts:
+            texto = "Olá! Posso ajudar com consultas do INVENTRA e propostas para aprovação."
         return {
             "agentes_chamados": ["roteador"],
-            "rota":             "fim",
-            "messages":         [{"role": "assistant", "content": texto}],
+            "rota": "fim",
+            "messages": [{"role": "assistant", "content": texto}],
         }
 
     rota = "fim"
@@ -179,10 +196,14 @@ def no_roteador(estado: Estado, config: RunnableConfig) -> dict:
             rota = linha.split("=", 1)[1].strip().lower()
             break
 
+    if rota not in {"estoquista", "comprador", "supervisor", "faq"}:
+        rota = "supervisor"
+
     return {
         "agentes_chamados": ["roteador"],
-        "rota":             rota,
+        "rota": rota,
     }
+
 
 def no_orquestrador(estado: Estado) -> dict:
     ultima_especialista = ""
@@ -193,104 +214,138 @@ def no_orquestrador(estado: Estado) -> dict:
 
     texto_para_orquestrar = f"Formate a resposta a seguir para o usuário final de forma amigável: {ultima_especialista}"
 
-    saida = orquestrador_app.invoke({
-        "mensagens": texto_para_orquestrar
-    })
+    saida = orquestrador_app.invoke({"mensagens": texto_para_orquestrar})
+
+    pergunta, fatos, _ = extrair_pergunta_fatos_e_resposta(estado["messages"])
+    final_text = extrair_texto(saida)
+    if (
+        avaliar_alucinacao(pergunta, fatos or FATOS_VAZIOS, final_text).confianca
+        < LIMIAR_CONFIANCA_JUIZ
+    ):
+        final_text = ultima_especialista
 
     return {
         "agentes_chamados": [estado["rota"], "orquestrador"],
-        "messages":         [{"role": "assistant", "content": extrair_texto(saida)}],
+        "messages": [{"role": "assistant", "content": final_text}],
     }
+
 
 def no_juiz(estado: Estado, config: RunnableConfig) -> dict:
     pergunta, fatos, resposta = extrair_pergunta_fatos_e_resposta(estado["messages"])
 
     if not resposta:
         return {
-            "agentes_chamados":     ["juiz:sem_resposta_para_validar"],
-            "repetir_especialista": False
+            "agentes_chamados": ["juiz:sem_resposta_para_validar"],
+            "repetir_especialista": False,
         }
 
     resultado = avaliar_alucinacao(pergunta, fatos or FATOS_VAZIOS, resposta)
     aprovado = resultado.confianca >= LIMIAR_CONFIANCA_JUIZ
 
     if aprovado:
-        return {
-            "agentes_chamados":     ["juiz:aprovado"],
-            "repetir_especialista": False
-        }
+        return {"agentes_chamados": ["juiz:aprovado"], "repetir_especialista": False}
 
     configuravel = (config or {}).get("configurable", {})
     salvar_mensagem_juiz(
         session_id=configuravel.get("thread_id", ""),
         conteudo=f'Resposta avaliada: "{resposta}" — Motivo: {resultado.motivo}',
         confianca=resultado.confianca,
-        user_id=configuravel.get("user_id", "user_test")
+        user_id=configuravel.get("user_id", "user_test"),
+        kitchen_id=configuravel.get("kitchen_id", 1),
     )
 
     tentativas = estado.get("tentativas_juiz", 0) + 1
 
     if tentativas >= MAX_TENTATIVAS_JUIZ:
-        mensagens: list = [{
-            "role":    "assistant",
-            "content": (
-                "Não consegui confirmar essa informação com segurança nos dados "
-                "do sistema. Pode reformular a pergunta ou falar com o suporte?"
-            )
-        }]
+        mensagens: list = [
+            {
+                "role": "assistant",
+                "content": (
+                    "Não consegui confirmar essa informação com segurança nos dados "
+                    "do sistema. Pode reformular a pergunta ou falar com o suporte?"
+                ),
+            }
+        ]
 
         mensagem_anterior = ultima_mensagem_ai(estado["messages"])
         if mensagem_anterior and mensagem_anterior.id:
             mensagens.insert(0, RemoveMessage(id=mensagem_anterior.id))
 
         return {
-            "agentes_chamados":     [f"juiz:reprovado_final:{resultado.motivo}"],
+            "agentes_chamados": [f"juiz:reprovado_final:{resultado.motivo}"],
             "repetir_especialista": False,
-            "tentativas_juiz":      tentativas,
-            "messages":             mensagens,
+            "tentativas_juiz": tentativas,
+            "messages": mensagens,
         }
 
     return {
-        "agentes_chamados":     [f"juiz:reprovado:{resultado.motivo}"],
+        "agentes_chamados": [f"juiz:reprovado:{resultado.motivo}"],
         "repetir_especialista": True,
-        "tentativas_juiz":      tentativas,
-        "messages": [HumanMessage(
-            content=(
-                f"Sua última resposta não pôde ser confirmada pelos dados "
-                f"retornados pelas ferramentas (motivo: {resultado.motivo}). Responda "
-                "novamente usando ESTRITAMENTE os dados já obtidos; se necessário, "
-                "chame as ferramentas novamente."
-            ),
-            additional_kwargs={"juiz_feedback": True},
-        )],
+        "tentativas_juiz": tentativas,
+        "messages": [
+            HumanMessage(
+                content=(
+                    f"Sua última resposta não pôde ser confirmada pelos dados "
+                    f"retornados pelas ferramentas (motivo: {resultado.motivo}). Responda "
+                    "novamente usando ESTRITAMENTE os dados já obtidos; se necessário, "
+                    "chame as ferramentas novamente."
+                ),
+                additional_kwargs={"juiz_feedback": True},
+            )
+        ],
     }
+
 
 def decidir_pos_juiz(estado: Estado) -> str:
     if estado.get("repetir_especialista"):
         return estado["rota"]
     return "guardrail_saida" if estado["rota"] == "faq" else "orquestrador"
 
+
 def decidir_especialista(estado: Estado) -> str:
-    return estado["rota"] if estado["rota"] in ("estoquista", "comprador", "supervisor", "faq") else "fim"
+    return (
+        estado["rota"]
+        if estado["rota"] in ("estoquista", "comprador", "supervisor", "faq")
+        else "fim"
+    )
+
 
 def decidir_pos_guardrail_insulto(estado: Estado) -> str:
     return "guardrail_escopo" if estado["rota"] != "fim" else "fim"
 
+
 def decidir_pos_guardrail_escopo(estado: Estado) -> str:
     return "roteador" if estado["rota"] != "fim" else "fim"
 
+
 grafo = StateGraph(Estado)
 
-grafo.add_node("guardrail_insulto", no_guardrail_insulto)  # type: ignore[call-overload]
-grafo.add_node("guardrail_escopo", no_guardrail_escopo)  # type: ignore[call-overload]
-grafo.add_node("roteador",     no_roteador)  # type: ignore[call-overload]
-grafo.add_node("estoquista",   estoquista_app)
-grafo.add_node("comprador",    comprador_app)
-grafo.add_node("supervisor",   supervisor_app)
-grafo.add_node("faq",          faq_app)
-grafo.add_node("juiz",         no_juiz)  # type: ignore[call-overload]
-grafo.add_node("orquestrador", no_orquestrador)  # type: ignore[call-overload]
-grafo.add_node("guardrail_saida", no_guardrail_saida)  # type: ignore[call-overload]
+grafo.add_node("guardrail_insulto", no_guardrail_insulto)  # type: ignore[call-overload,arg-type]
+grafo.add_node("guardrail_escopo", no_guardrail_escopo)  # type: ignore[call-overload,arg-type]
+grafo.add_node("roteador", no_roteador)  # type: ignore[call-overload,arg-type]
+
+
+def especialista_node(nome):
+    def invoke(estado, config):
+        agente = {
+            "estoquista": estoquista_app,
+            "comprador": comprador_app,
+            "supervisor": supervisor_app,
+            "faq": faq_app,
+        }[nome]
+        resposta = agente.invoke({"messages": list(estado["messages"])}, config=config)
+        return {"messages": resposta["messages"]}
+
+    return invoke
+
+
+grafo.add_node("estoquista", especialista_node("estoquista"))
+grafo.add_node("comprador", especialista_node("comprador"))
+grafo.add_node("supervisor", especialista_node("supervisor"))
+grafo.add_node("faq", especialista_node("faq"))
+grafo.add_node("juiz", no_juiz)  # type: ignore[call-overload,arg-type]
+grafo.add_node("orquestrador", no_orquestrador)  # type: ignore[call-overload,arg-type]
+grafo.add_node("guardrail_saida", no_guardrail_saida)  # type: ignore[call-overload,arg-type]
 
 grafo.set_entry_point("guardrail_insulto")
 
@@ -299,7 +354,7 @@ grafo.add_conditional_edges(
     decidir_pos_guardrail_insulto,
     {
         "guardrail_escopo": "guardrail_escopo",
-        "fim":                END,
+        "fim": END,
     },
 )
 
@@ -308,7 +363,7 @@ grafo.add_conditional_edges(
     decidir_pos_guardrail_escopo,
     {
         "roteador": "roteador",
-        "fim":        END,
+        "fim": END,
     },
 )
 
@@ -317,27 +372,27 @@ grafo.add_conditional_edges(
     decidir_especialista,
     {
         "estoquista": "estoquista",
-        "comprador":  "comprador",
+        "comprador": "comprador",
         "supervisor": "supervisor",
-        "faq":        "faq",
-        "fim":        "guardrail_saida",
+        "faq": "faq",
+        "fim": "guardrail_saida",
     },
 )
 
-grafo.add_edge("estoquista",   "juiz")
-grafo.add_edge("comprador",    "juiz")
-grafo.add_edge("supervisor",   "juiz")
-grafo.add_edge("faq",          "juiz")
+grafo.add_edge("estoquista", "juiz")
+grafo.add_edge("comprador", "juiz")
+grafo.add_edge("supervisor", "juiz")
+grafo.add_edge("faq", "juiz")
 
 grafo.add_conditional_edges(
     "juiz",
     decidir_pos_juiz,
     {
-        "estoquista":      "estoquista",
-        "comprador":       "comprador",
-        "supervisor":      "supervisor",
-        "faq":             "faq",
-        "orquestrador":    "orquestrador",
+        "estoquista": "estoquista",
+        "comprador": "comprador",
+        "supervisor": "supervisor",
+        "faq": "faq",
+        "orquestrador": "orquestrador",
         "guardrail_saida": "guardrail_saida",
     },
 )
@@ -345,46 +400,134 @@ grafo.add_conditional_edges(
 grafo.add_edge("orquestrador", "guardrail_saida")
 grafo.add_edge("guardrail_saida", END)
 
-memory = MemorySaver()
-fluxo_agentes = grafo.compile(checkpointer=memory)
+fluxo_agentes = grafo.compile()  # histórico reidratado do Mongo a cada rodada
 
-def executar_fluxo_assessor(pergunta_usuario: str, session_id: str, user_id: str = "user_test") -> str:
-    iniciar_sessao(session_id, user_id=user_id)
 
-    estado_inicial: Estado = {
-        "messages":             [HumanMessage(content=pergunta_usuario)],
-        "agentes_chamados":     [],
-        "rota":                 "",
-        "mapa_pii":             {},
-        "tentativas_juiz":      0,
-        "repetir_especialista": False,
-    }
+def executar_fluxo_assessor(
+    pergunta_usuario: str, session_id: str, user_id: str = "user_test"
+) -> str:
+    import json
 
+    from fastapi import HTTPException
+    from pymongo.errors import PyMongoError
+
+    ctx = context()
+    if user_id != ctx.identity.user_id:
+        raise HTTPException(403, "user_id diverge da identidade autenticada.")
+    k = ctx.identity.kitchen_id
+    iniciar_sessao(session_id, user_id=user_id, kitchen_id=k)
+    previous = mensagens_ativas(session_id, user_id, k)[-30:]
+    history = [
+        HumanMessage(content=m.content)
+        if m.role == "human"
+        else {"role": "assistant", "content": anonimizar_entrada(m.content)[0]}
+        for m in previous
+    ]
+    estado_inicial = cast(
+        Estado,
+        {
+            "messages": history + [HumanMessage(content=pergunta_usuario)],
+            "agentes_chamados": [],
+            "rota": "",
+            "mapa_pii": {},
+            "tentativas_juiz": 0,
+            "repetir_especialista": False,
+        },
+    )
     coletor = ColetorMetricas()
-    inicio = perf_counter()
+    started = perf_counter()
+    status = "ok"
+    error_type = None
+    output: dict = {}
     try:
-        estado_final = fluxo_agentes.invoke(
-            estado_inicial,
-            config={
-                "configurable": {"thread_id": session_id, "user_id": user_id},
-                "callbacks":    [coletor],
-                "run_name":     "iai_chat",
-                "tags":         ["iai"],
-                "metadata":     {"session_id": session_id, "user_id": user_id},
-            },
-        )
-    except Exception:
-        registrar_requisicao(coletor, inicio, session_id, user_id, None, falhou=True)
+        if LLM_MODE == "demo":
+            from iai.app.demo import demo_graph
+
+            output = demo_graph.invoke(estado_inicial)
+        else:
+            from iai.app.config import GEMINI_API_KEY, GROQ_API_KEY
+
+            if (
+                not GROQ_API_KEY.get_secret_value()
+                or not GEMINI_API_KEY.get_secret_value()
+            ):
+                raise HTTPException(
+                    503,
+                    "Provedores LLM não configurados. Configure chaves ou habilite explicitamente o modo demo.",
+                )
+            output = fluxo_agentes.invoke(
+                estado_inicial,
+                config={
+                    "configurable": {
+                        "thread_id": session_id,
+                        "user_id": user_id,
+                        "kitchen_id": k,
+                    },
+                    "recursion_limit": 80,
+                    "callbacks": [coletor],
+                    "run_name": "iai_chat",
+                    "tags": ["iai"],
+                    "metadata": {"session_id": session_id, "user_id": user_id},
+                },
+            )
+        response = extrair_texto(output["messages"][-1])
+        proposals = []
+        tool_failures = []
+        for message in reversed(output["messages"]):
+            if message.type == "human" and not message.additional_kwargs.get(
+                "juiz_feedback"
+            ):
+                break
+            if message.type == "tool":
+                try:
+                    data = json.loads(extrair_texto(message))
+                    if isinstance(data, dict) and data.get("proposal"):
+                        proposals.append(data["proposal"])
+                    elif isinstance(data, dict) and data.get("ok") is False:
+                        tool_failures.append(
+                            f"{data.get('code', 'ERRO')}: {data.get('message', 'Etapa não confirmada.')}"
+                        )
+                except (ValueError, TypeError):
+                    pass
+        if proposals:
+            response = "\n".join(
+                f"Proposta {p['id']}: {p['action']['operation']} — {json.dumps(p['action']['parameters'], ensure_ascii=False)}. Estado: {p['status']}. Nenhuma alteração de negócio foi executada nesta conversa."
+                for p in reversed(proposals)
+            )
+            if tool_failures:
+                response += "\nEtapas não concluídas:\n" + "\n".join(
+                    reversed(tool_failures)
+                )
+            response += "\nSomente as propostas listadas foram registradas; outros itens ou dados ainda não confirmados não foram propostos."
+        if BUSINESS_MODE == "mock":
+            response = "[DADOS OPERACIONAIS MOCK — demonstração]\n" + response
+        if LLM_MODE == "demo":
+            response = "[INTERPRETAÇÃO DEMO limitada — sem LLM]\n" + response
+        from iai.app.privacy import remove_secrets
+
+        response = remove_secrets(response)
+        anonymous, _ = anonimizar_entrada(pergunta_usuario)
+        salvar_mensagem(session_id, "human", anonymous, user_id=user_id, kitchen_id=k)
+        salvar_mensagem(session_id, "iai", response, user_id=user_id, kitchen_id=k)
+        return response
+    except (HTTPException, PyMongoError) as exc:
+        status = "erro"
+        error_type = type(exc).__name__
         raise
-
-    registrar_requisicao(coletor, inicio, session_id, user_id, estado_final, falhou=False)
-
-    pergunta_anonimizada, _ = anonimizar_entrada(pergunta_usuario)
-    resposta_final = extrair_texto(estado_final["messages"][-1])
-
-    salvar_mensagem(session_id, "human", pergunta_anonimizada, user_id=user_id)
-    salvar_mensagem(session_id, "iai", resposta_final, user_id=user_id)
-
-    print(f"\n[Debug] Agentes chamados: {estado_final['agentes_chamados']}")
-
-    return resposta_final
+    except Exception as exc:  # noqa: BLE001 - não expor mensagens de SDK com credenciais
+        status = "erro"
+        error_type = type(exc).__name__
+        raise HTTPException(
+            502,
+            "Não foi possível concluir o fluxo. Verifique suas solicitações antes de repetir; nenhuma execução de negócio é realizada pelo modelo.",
+        ) from None
+    finally:
+        registrar_requisicao(
+            coletor,
+            started,
+            session_id,
+            ctx.identity,
+            output,
+            falhou=status == "erro",
+            error_type=error_type,
+        )

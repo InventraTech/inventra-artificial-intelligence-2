@@ -34,26 +34,28 @@ def test_recuperar_mensagem_filtra_role_judge(monkeypatch):
         ]
     }
     monkeypatch.setattr(memory_module, "col_sessoes", _ColSessoesFalsa(doc=doc))
-    resultado = memory_module.recuperar_mensagem("doc-1")
+    resultado = memory_module.recuperar_mensagem("doc-1", "user-test")
     assert [m.role for m in resultado] == ["human", "iai"]
 
 
 def test_recuperar_mensagem_doc_inexistente_retorna_lista_vazia(monkeypatch):
     monkeypatch.setattr(memory_module, "col_sessoes", _ColSessoesFalsa(doc=None))
-    assert memory_module.recuperar_mensagem("doc-x") == []
+    assert memory_module.recuperar_mensagem("doc-x", "user-test") == []
 
 
 def test_salvar_mensagem_juiz_grava_role_judge_com_confianca(monkeypatch):
     fake = _ColSessoesFalsa()
     monkeypatch.setattr(memory_module, "col_sessoes", fake)
     monkeypatch.setattr(memory_module, "iniciar_sessao", lambda *_a, **_k: None)
-    monkeypatch.setattr(memory_module, "doc_id_da_sessao", lambda _sid: "doc-1")
+    monkeypatch.setattr(memory_module, "doc_id_da_sessao", lambda *_args: "doc-1")
 
-    memory_module.salvar_mensagem_juiz("sessao-1", "motivo da reprovação", 0.3, user_id="user-1")
+    memory_module.salvar_mensagem_juiz(
+        "sessao-1", "motivo da reprovação", 0.3, user_id="user-1"
+    )
 
     assert len(fake.updates) == 1
     filtro, update = fake.updates[0]
-    assert filtro == {"_id": "doc-1"}
+    assert filtro == {"_id": "doc-1", "user_id": "user-1", "kitchen_id": 1}
     assert update["$push"]["messages"] == {
         "role": "judge",
         "content": "motivo da reprovação",

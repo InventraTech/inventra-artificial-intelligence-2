@@ -26,15 +26,25 @@ class _LlmFalso:
 
 
 def test_guardrail_escopo_aprova_quando_llm_libera(monkeypatch):
-    resultado_fake = ResultadoGuardrail(bloqueado=False, motivo="dentro_do_escopo", mensagem="")
-    monkeypatch.setattr(guardrail_module, "llm_rapido", _LlmFalso(resultado=resultado_fake))
+    resultado_fake = ResultadoGuardrail(
+        bloqueado=False, motivo="dentro_do_escopo", mensagem=""
+    )
+    monkeypatch.setattr(
+        guardrail_module, "llm_rapido", _LlmFalso(resultado=resultado_fake)
+    )
     resultado = guardrail_escopo("quantos tomates temos em estoque?")
-    assert resultado == {"bloqueado": False, "motivo": "dentro_do_escopo", "mensagem": ""}
+    assert resultado == {
+        "bloqueado": False,
+        "motivo": "dentro_do_escopo",
+        "mensagem": "",
+    }
 
 
 def test_guardrail_escopo_falha_segura_quando_llm_da_erro(monkeypatch):
     monkeypatch.setattr(
-        guardrail_module, "llm_rapido", _LlmFalso(erro=RuntimeError("falha simulada de API"))
+        guardrail_module,
+        "llm_rapido",
+        _LlmFalso(erro=RuntimeError("falha simulada de API")),
     )
     resultado = guardrail_escopo("quantos tomates temos em estoque?")
     assert resultado["bloqueado"] is True
@@ -42,10 +52,18 @@ def test_guardrail_escopo_falha_segura_quando_llm_da_erro(monkeypatch):
 
 
 def test_guardrail_escopo_aprova_pergunta_sobre_ocr(monkeypatch):
-    resultado_fake = ResultadoGuardrail(bloqueado=False, motivo="dentro_do_escopo", mensagem="")
-    monkeypatch.setattr(guardrail_module, "llm_rapido", _LlmFalso(resultado=resultado_fake))
+    resultado_fake = ResultadoGuardrail(
+        bloqueado=False, motivo="dentro_do_escopo", mensagem=""
+    )
+    monkeypatch.setattr(
+        guardrail_module, "llm_rapido", _LlmFalso(resultado=resultado_fake)
+    )
     resultado = guardrail_escopo("o cadastro por foto com OCR funciona sozinho?")
-    assert resultado == {"bloqueado": False, "motivo": "dentro_do_escopo", "mensagem": ""}
+    assert resultado == {
+        "bloqueado": False,
+        "motivo": "dentro_do_escopo",
+        "mensagem": "",
+    }
 
 
 def test_prompt_guardrail_escopo_explica_ocr_como_permitido():
@@ -54,22 +72,34 @@ def test_prompt_guardrail_escopo_explica_ocr_como_permitido():
 
 
 def test_guardrail_insulto_bloqueia_quando_modelo_detecta(monkeypatch):
-    resultado_fake = ResultadoGuardrail(bloqueado=True, motivo="insulto", mensagem="respeite, por favor")
-    monkeypatch.setattr(guardrail_module, "llm_guardrail", _LlmFalso(resultado=resultado_fake))
+    resultado_fake = ResultadoGuardrail(
+        bloqueado=True, motivo="insulto", mensagem="respeite, por favor"
+    )
+    monkeypatch.setattr(
+        guardrail_module, "llm_guardrail", _LlmFalso(resultado=resultado_fake)
+    )
     resultado = guardrail_insulto("seu idiota")
-    assert resultado == {"bloqueado": True, "motivo": "insulto", "mensagem": "respeite, por favor"}
+    assert resultado == {
+        "bloqueado": True,
+        "motivo": "insulto",
+        "mensagem": "respeite, por favor",
+    }
 
 
 def test_guardrail_insulto_aprova_quando_modelo_libera(monkeypatch):
     resultado_fake = ResultadoGuardrail(bloqueado=False, motivo="ok", mensagem="")
-    monkeypatch.setattr(guardrail_module, "llm_guardrail", _LlmFalso(resultado=resultado_fake))
+    monkeypatch.setattr(
+        guardrail_module, "llm_guardrail", _LlmFalso(resultado=resultado_fake)
+    )
     resultado = guardrail_insulto("quantos tomates temos em estoque?")
     assert resultado == {"bloqueado": False, "motivo": "aprovado", "mensagem": ""}
 
 
 def test_guardrail_insulto_falha_segura_quando_modelo_da_erro(monkeypatch):
     monkeypatch.setattr(
-        guardrail_module, "llm_guardrail", _LlmFalso(erro=RuntimeError("falha simulada de API"))
+        guardrail_module,
+        "llm_guardrail",
+        _LlmFalso(erro=RuntimeError("falha simulada de API")),
     )
     resultado = guardrail_insulto("quantos tomates temos em estoque?")
     assert resultado["bloqueado"] is True
@@ -100,11 +130,13 @@ def test_anonimiza_email():
     assert "[EMAIL_0]" in resultado
     assert mapa["[EMAIL_0]"] == "joao@teste.com"
 
+
 def test_anonimiza_cpf():
     texto = "meu cpf é 123.456.789-00"
     resultado, _mapa = anonimizar_entrada(texto)
     assert "123.456.789-00" not in resultado
     assert "[CPF_0]" in resultado
+
 
 def test_anonimiza_rg():
     texto = "meu rg é 12.345.678-9"
@@ -113,12 +145,14 @@ def test_anonimiza_rg():
     assert "[RG_0]" in resultado
     assert mapa["[RG_0]"] == "12.345.678-9"
 
+
 def test_anonimiza_telefone():
     texto = "meu telefone é (11) 91234-5678"
     resultado, mapa = anonimizar_entrada(texto)
     assert "(11) 91234-5678" not in resultado
     assert "[TELEFONE_0]" in resultado
     assert mapa["[TELEFONE_0]"] == "(11) 91234-5678"
+
 
 def test_sem_pii_nao_altera_texto():
     texto = "quantos tomates temos em estoque?"

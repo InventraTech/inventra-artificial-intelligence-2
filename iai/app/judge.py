@@ -30,7 +30,9 @@ def extrair_texto(mensagem: BaseMessage) -> str:
     return str(conteudo)
 
 
-def extrair_pergunta_fatos_e_resposta(mensagens: Sequence[BaseMessage]) -> tuple[str, str, str]:
+def extrair_pergunta_fatos_e_resposta(
+    mensagens: Sequence[BaseMessage],
+) -> tuple[str, str, str]:
     """
     Varre a rodada atual (do fim até a última mensagem humana) e separa:
     - pergunta: a pergunta original do usuário que originou a rodada.
@@ -62,14 +64,19 @@ def ultima_mensagem_ai(mensagens: Sequence[BaseMessage]) -> BaseMessage | None:
     return None
 
 
-juiz_prompt = ChatPromptTemplate.from_messages([
-    ("system", JUIZ_ALUCINACAO_SYSTEM_PROMPT),
-    ("human", (
-        "PERGUNTA DO USUÁRIO:\n{pergunta}\n\n"
-        "FATOS DISPONÍVEIS:\n{fatos}\n\n"
-        "RESPOSTA DO ESPECIALISTA:\n{resposta}"
-    )),
-])
+juiz_prompt = ChatPromptTemplate.from_messages(
+    [
+        ("system", JUIZ_ALUCINACAO_SYSTEM_PROMPT),
+        (
+            "human",
+            (
+                "PERGUNTA DO USUÁRIO:\n{pergunta}\n\n"
+                "FATOS DISPONÍVEIS:\n{fatos}\n\n"
+                "RESPOSTA DO ESPECIALISTA:\n{resposta}"
+            ),
+        ),
+    ]
+)
 
 juiz_chain = juiz_prompt | llm_rapido.with_structured_output(ResultadoJuiz)
 
@@ -82,7 +89,9 @@ def avaliar_alucinacao(pergunta: str, fatos: str, resposta: str) -> ResultadoJui
     nessa nota é o chamador (ver LIMIAR_CONFIANCA_JUIZ).
     """
     try:
-        resultado = juiz_chain.invoke({"pergunta": pergunta, "fatos": fatos, "resposta": resposta})
+        resultado = juiz_chain.invoke(
+            {"pergunta": pergunta, "fatos": fatos, "resposta": resposta}
+        )
         assert isinstance(resultado, ResultadoJuiz)
         return resultado
     except Exception:  # noqa: BLE001 - fail-safe: erro na chamada ao LLM bloqueia a resposta
