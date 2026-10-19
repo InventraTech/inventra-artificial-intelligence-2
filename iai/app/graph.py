@@ -320,9 +320,9 @@ def decidir_pos_guardrail_escopo(estado: Estado) -> str:
 
 grafo = StateGraph(Estado)
 
-grafo.add_node("guardrail_insulto", no_guardrail_insulto)  # type: ignore[call-overload]
-grafo.add_node("guardrail_escopo", no_guardrail_escopo)  # type: ignore[call-overload]
-grafo.add_node("roteador", no_roteador)  # type: ignore[call-overload]
+grafo.add_node("guardrail_insulto", no_guardrail_insulto)  # type: ignore[call-overload,arg-type]
+grafo.add_node("guardrail_escopo", no_guardrail_escopo)  # type: ignore[call-overload,arg-type]
+grafo.add_node("roteador", no_roteador)  # type: ignore[call-overload,arg-type]
 
 
 def especialista_node(nome):
@@ -343,9 +343,9 @@ grafo.add_node("estoquista", especialista_node("estoquista"))
 grafo.add_node("comprador", especialista_node("comprador"))
 grafo.add_node("supervisor", especialista_node("supervisor"))
 grafo.add_node("faq", especialista_node("faq"))
-grafo.add_node("juiz", no_juiz)  # type: ignore[call-overload]
-grafo.add_node("orquestrador", no_orquestrador)  # type: ignore[call-overload]
-grafo.add_node("guardrail_saida", no_guardrail_saida)  # type: ignore[call-overload]
+grafo.add_node("juiz", no_juiz)  # type: ignore[call-overload,arg-type]
+grafo.add_node("orquestrador", no_orquestrador)  # type: ignore[call-overload,arg-type]
+grafo.add_node("guardrail_saida", no_guardrail_saida)  # type: ignore[call-overload,arg-type]
 
 grafo.set_entry_point("guardrail_insulto")
 

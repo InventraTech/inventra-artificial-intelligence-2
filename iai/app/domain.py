@@ -176,7 +176,7 @@ ROLE_OPERATIONS = {
 }
 
 
-PARAMETERS = dict(
+PARAMETERS: dict[Operation, type[StrictModel]] = dict(
     zip(
         Operation,
         [
