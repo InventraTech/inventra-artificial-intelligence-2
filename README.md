@@ -111,6 +111,33 @@ propor cada operação (`ROLE_OPERATIONS`) estão em `GET /queries/capabilities`
 validade, fornecedores, requisições, inventários, alertas, catálogos etc.). Nenhuma tool aprova
 ou executa: as `propor_*` só criam propostas.
 
+## Integração com a API Spring e com agentes externos (MCP)
+
+**Sistema integrado:** API REST do Inventra (Spring), em `INVENTRA_API_URL`. Os agentes não
+acessam o PostgreSQL; leem e propõem alterações pelas tools, que chamam a API
+(`SpringGateway`, em `business.py`).
+
+**Autenticação:** o JWT do usuário vai em `Authorization: Bearer` em toda chamada. A identidade
+(usuário, cozinha, cargo) é validada em `GET /api/users/me` e nunca vem do cliente ou do modelo.
+O token fica só no contexto da requisição (não entra em prompt, histórico ou log).
+
+| Tool (agente) | Endpoints consumidos |
+|---|---|
+| `consultar_inventra` (todos) | `GET /api/products`, `/api/suppliers`, `/api/stock-batches` (+ `/expiring-soon`, `/low-stock`), `/api/products/{id}/kitchen-parameters`, `/api/products/{id}/suppliers`, `/api/requisitions` (+ `/{id}/items`), `/api/inventories` (+ `/{id}/counts`), `/api/alerts`, `/api/categories`, `/api/units`, `/api/kitchens` |
+| `propor_*` (estoquista, comprador, supervisor) | só criam proposta no Mongo da IAI; depois da aprovação, a execução chama `POST/PUT/PATCH` em `/api/products`, `/api/suppliers`, `/api/stock-batches` (`restock`, `consume`, `adjust`), `/api/requisitions` (`items`, `cancel`) e `/api/inventories` (`counts`) |
+
+**Erros:** a integração nunca derruba o agente. API fora do ar, timeout, status inesperado ou
+resposta inválida viram um resultado com código (`SERVICO_INDISPONIVEL`, `RESPOSTA_INVALIDA`,
+`SEM_PERMISSAO`, `NAO_ENCONTRADO`), que o agente explica ao usuário. Escritas com resultado
+incerto (`RESULTADO_INCERTO`) não são repetidas automaticamente. Cobertos em
+`tests/test_business.py` com falhas HTTP simuladas.
+
+**Como validar contra a API real:** `RUN_SPRING_TESTS=1` e `SPRING_TEST_TOKEN` (veja Testes), ou
+`POST /queries` com `{"resource": "produtos"}` e um JWT no **Authorize** do `/docs`.
+
+**Agentes externos:** o servidor MCP abaixo expõe as mesmas tools a qualquer cliente MCP.
+Não há implementação de A2A.
+
 ## Servidor MCP
 
 As mesmas tools dos agentes podem ser usadas por Cursor, Cline ou qualquer cliente MCP, sem
