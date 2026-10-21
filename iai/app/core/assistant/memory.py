@@ -6,10 +6,10 @@ from datetime import UTC, datetime
 from fastapi import HTTPException
 from pymongo.errors import DuplicateKeyError
 
-from iai.app.config import LLM_MODE
-from iai.app.retrieval import rank
-from iai.app.schemas import MensagemHistorico, SessaoResumo
-from iai.app.storage import CollectionProxy
+from iai.app.core.config import LLM_MODE
+from iai.app.core.infra.retrieval import rank
+from iai.app.core.infra.storage import CollectionProxy
+from iai.app.core.schemas import MensagemHistorico, SessaoResumo
 
 col_sessoes = CollectionProxy("sessions")
 sessoes_ativas: dict = {}
@@ -28,9 +28,9 @@ def formatar_conversa(mensagens):
 def gerar_resumo(mensagens):
     if LLM_MODE == "demo":
         return "Resumo DEMO (sem LLM): " + formatar_conversa(mensagens)[-1500:]
-    from iai.app.guardrail import anonimizar_entrada
-    from iai.app.llms import llm_rapido
-    from iai.app.prompts import PROMPT_RESUMO
+    from iai.app.core.assistant.guardrail import anonimizar_entrada
+    from iai.app.core.assistant.llms import llm_rapido
+    from iai.app.core.assistant.prompts import PROMPT_RESUMO
 
     conversa, _ = anonimizar_entrada(formatar_conversa(mensagens))
     reply = llm_rapido.invoke(PROMPT_RESUMO.format(conversa=conversa))

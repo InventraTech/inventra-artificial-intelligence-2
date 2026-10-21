@@ -45,7 +45,7 @@ def test_real_mongo_atomic_claim_and_persistence():
     reason="API Spring e token de homologação não disponibilizados.",
 )
 def test_real_spring_identity_and_catalog_readonly():
-    from iai.app.config import API_URL
+    from iai.app.core.config import API_URL
 
     headers = {"Authorization": "Bearer " + os.environ["SPRING_TEST_TOKEN"]}
     with httpx.Client(

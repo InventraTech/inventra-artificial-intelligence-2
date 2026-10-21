@@ -3,9 +3,9 @@ from typing import Annotated, Literal
 from fastapi import APIRouter, Query
 from pydantic import Field
 
-from iai.app.metrics import gerar_metricas
-from iai.app.schemas import MetricasResponse
-from iai.app.security import Authenticated
+from iai.app.core.infra.metrics import gerar_metricas
+from iai.app.core.infra.security import Authenticated
+from iai.app.core.schemas import MetricasResponse
 
 router = APIRouter(tags=["metrics"])
 

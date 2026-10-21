@@ -1,9 +1,9 @@
 import httpx
 from pydantic import SecretStr
 
-from iai.app.business import MockGateway, SpringGateway
-from iai.app.domain import Query
-from iai.app.security import Identity, RequestContext
+from iai.app.core.infra.security import Identity, RequestContext
+from iai.app.core.inventra.business import MockGateway, SpringGateway
+from iai.app.core.inventra.domain import Query
 from tests_helpers import context_for
 
 
@@ -75,3 +75,28 @@ def test_related_product_queries_and_my_requisitions():
         )
         == 1
     )
+
+
+def test_stock_without_product_uses_kitchen_stock_endpoint(monkeypatch):
+    calls = []
+    rows = [
+        {
+            "product": {"id": 1, "name": "Arroz Camil"},
+            "totalQuantity": 25,
+            "minStock": 20,
+            "lowStock": False,
+        }
+    ]
+
+    def request(method, url, **kwargs):
+        calls.append(url)
+        return httpx.Response(200, json=rows)
+
+    monkeypatch.setattr(httpx, "request", request)
+    out = SpringGateway().query(Query(resource="estoque"), real_context())
+    assert out.ok and calls[0].endswith("/api/kitchens/7/stock")
+    assert out.data[0]["totalQuantity"] == 25
+    filtrado = SpringGateway().query(
+        Query(resource="estoque", name="arroz"), real_context()
+    )
+    assert len(filtrado.data) == 1

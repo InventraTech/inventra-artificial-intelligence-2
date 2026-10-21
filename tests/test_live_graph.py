@@ -8,12 +8,12 @@ from langchain.agents import create_agent
 from langchain_core.language_models.fake_chat_models import FakeMessagesListChatModel
 from langchain_core.messages import AIMessage
 
-from iai.app import graph
-from iai.app.domain import Operation
-from iai.app.schemas import ResultadoJuiz
-from iai.app.security import current_context
-from iai.app.storage import get_db
-from iai.app.tools.operational import PROPOSAL_TOOLS, consultar_inventra
+from iai.app.core.assistant import graph
+from iai.app.core.infra.security import current_context
+from iai.app.core.infra.storage import get_db
+from iai.app.core.inventra.domain import Operation
+from iai.app.core.schemas import ResultadoJuiz
+from iai.app.core.tools.operational import PROPOSAL_TOOLS, consultar_inventra
 from tests_helpers import context_for
 
 

@@ -1,8 +1,8 @@
 import pytest
 from fastapi.testclient import TestClient
 
+from iai.app.core.infra.storage import get_db
 from iai.app.main import app
-from iai.app.storage import get_db
 
 
 def auth(token="demo-estoquista"):

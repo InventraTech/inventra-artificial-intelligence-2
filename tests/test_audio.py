@@ -3,7 +3,7 @@ from types import SimpleNamespace
 import pytest
 from fastapi import HTTPException
 
-from iai.app import audio
+from iai.app.extras import audio
 
 
 def cliente_falso(texto):
@@ -53,10 +53,10 @@ def post_audio(client, headers=None, user_id="demo-estoquista"):
 def test_rota_transcreve_e_usa_o_fluxo_do_chat(monkeypatch):
     from fastapi.testclient import TestClient
 
-    from iai.app import graph
+    from iai.app.core.assistant import graph
+    from iai.app.core.infra.security import context
+    from iai.app.core.routes import chat
     from iai.app.main import app
-    from iai.app.routes import chat
-    from iai.app.security import context
 
     monkeypatch.setattr(
         chat, "transcrever_audio", lambda conteudo, nome: "quanto tenho de arroz"

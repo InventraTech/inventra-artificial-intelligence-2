@@ -1,8 +1,8 @@
 from langchain_core.runnables import RunnableConfig
 from langchain_core.tools import tool
 
-from iai.app.memory import recuperar_historico
-from iai.app.security import context
+from iai.app.core.assistant.memory import recuperar_historico
+from iai.app.core.infra.security import context
 
 
 @tool

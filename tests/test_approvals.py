@@ -6,11 +6,17 @@ import pytest
 from fastapi import HTTPException
 from pydantic import SecretStr, ValidationError
 
-from iai.app import approvals
-from iai.app.business import MockGateway
-from iai.app.domain import Action, DecisionInput, Operation, ProposalInput, Query
-from iai.app.security import DEMO_IDENTITIES, RequestContext
-from iai.app.storage import get_db
+from iai.app.core.infra.security import DEMO_IDENTITIES, RequestContext
+from iai.app.core.infra.storage import get_db
+from iai.app.core.inventra import approvals
+from iai.app.core.inventra.business import MockGateway
+from iai.app.core.inventra.domain import (
+    Action,
+    DecisionInput,
+    Operation,
+    ProposalInput,
+    Query,
+)
 
 
 def ctx(token="demo-estoquista"):

@@ -15,10 +15,10 @@ from fastapi.security import HTTPAuthorizationCredentials
 from mcp.server.mcpserver import MCPServer
 from mcp.types import ToolAnnotations
 
-from iai.app.security import RequestContext, authenticate, current_context
-from iai.app.tools.faq import faq_retriever
-from iai.app.tools.memoria import TOOLS_MEMORIA
-from iai.app.tools.operational import BUY_TOOLS, STOCK_TOOLS, SUPERVISOR_TOOLS
+from iai.app.core.infra.security import RequestContext, authenticate, current_context
+from iai.app.core.tools.faq import faq_retriever
+from iai.app.core.tools.memoria import TOOLS_MEMORIA
+from iai.app.core.tools.operational import BUY_TOOLS, STOCK_TOOLS, SUPERVISOR_TOOLS
 
 TOOLS_POR_CARGO = {
     "ESTOQUISTA": STOCK_TOOLS,
@@ -94,7 +94,7 @@ def contexto_do_ambiente() -> RequestContext:
 if __name__ == "__main__":
     from pymongo.errors import PyMongoError
 
-    from iai.app.storage import initialize_storage
+    from iai.app.core.infra.storage import initialize_storage
 
     contexto = contexto_do_ambiente()
     try:

@@ -13,7 +13,7 @@ import pytest
 
 @pytest.fixture(autouse=True)
 def isolated_database():
-    from iai.app.storage import get_db, initialize_storage
+    from iai.app.core.infra.storage import get_db, initialize_storage
 
     db = get_db()
     for collection in db.list_collection_names():

@@ -4,9 +4,16 @@ from typing import Annotated
 
 from fastapi import APIRouter, File, Form, HTTPException, Query, UploadFile
 
-from iai.app.audio import TAMANHO_MAXIMO_BYTES, transcrever_audio
-from iai.app.memory import encerrar_sessao, recuperar_historico, recuperar_mensagem
-from iai.app.schemas import (
+from iai.app.core.assistant.memory import (
+    encerrar_sessao,
+    recuperar_historico,
+    recuperar_mensagem,
+)
+from iai.app.core.infra.security import (
+    Authenticated,
+    current_context,
+)
+from iai.app.core.schemas import (
     ChatAudioResponse,
     ChatRequest,
     ChatResponse,
@@ -15,10 +22,7 @@ from iai.app.schemas import (
     HistoricoResponse,
     MensagensResponse,
 )
-from iai.app.security import (
-    Authenticated,
-    current_context,
-)
+from iai.app.extras.audio import TAMANHO_MAXIMO_BYTES, transcrever_audio
 
 router = APIRouter(tags=["chat"])
 
@@ -26,7 +30,7 @@ router = APIRouter(tags=["chat"])
 def executar_no_contexto(
     ctx, pergunta: str, session_id: str, request_id: str | None = None
 ) -> str:
-    from iai.app.graph import executar_fluxo_assessor
+    from iai.app.core.assistant.graph import executar_fluxo_assessor
 
     marker = current_context.set(
         replace(ctx, session_id=session_id, turn_id=request_id or str(uuid.uuid4()))

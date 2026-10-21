@@ -4,17 +4,17 @@ from datetime import UTC
 
 import pytest
 
-from iai.app.domain import Operation
-from iai.app.guardrail import anonimizar_entrada
-from iai.app.memory import (
+from iai.app.core.assistant.guardrail import anonimizar_entrada
+from iai.app.core.assistant.memory import (
     iniciar_sessao,
     recuperar_historico,
     recuperar_mensagem,
     salvar_mensagem,
 )
-from iai.app.security import current_context
-from iai.app.storage import get_db
-from iai.app.tools.operational import (
+from iai.app.core.infra.security import current_context
+from iai.app.core.infra.storage import get_db
+from iai.app.core.inventra.domain import Operation
+from iai.app.core.tools.operational import (
     PROPOSAL_TOOLS,
     consultar_inventra,
     consultar_solicitacoes_iai,
@@ -63,7 +63,7 @@ def test_tokens_never_enter_pii_map_or_model_text():
 def test_credentials_are_rejected_in_proposals_and_decisions():
     from pydantic import ValidationError
 
-    from iai.app.domain import Action, DecisionInput, ProposalInput
+    from iai.app.core.inventra.domain import Action, DecisionInput, ProposalInput
 
     with pytest.raises(ValidationError):
         ProposalInput(
@@ -100,7 +100,7 @@ def test_memory_search_uses_query_and_isolates_user_and_kitchen():
     matches = recuperar_historico("u", busca="arroz", kitchen_id=1)
     assert [m.doc_id for m in matches] == ["a"]
     assert recuperar_historico("u", busca="zqqwy", kitchen_id=1) == []
-    from iai.app.tools.memoria import buscar_historico
+    from iai.app.core.tools.memoria import buscar_historico
 
     actor = context_for()
     marker = current_context.set(

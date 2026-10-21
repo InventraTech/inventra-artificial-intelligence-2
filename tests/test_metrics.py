@@ -6,7 +6,7 @@ from fastapi.testclient import TestClient
 from langchain_core.messages import AIMessage
 from langchain_core.outputs import ChatGeneration, LLMResult
 
-import iai.app.metrics as m
+import iai.app.core.infra.metrics as m
 from tests_helpers import context_for
 
 AUTH = {"Authorization": "Bearer demo-supervisor"}
@@ -188,7 +188,7 @@ def test_metrics_filtra_por_cozinha_e_papel(turnos_exemplo):
 
 
 def test_registro_guarda_so_dados_tecnicos(monkeypatch):
-    from iai.app.storage import get_db
+    from iai.app.core.infra.storage import get_db
 
     identity = context_for("demo-comprador").identity
     m.registrar_requisicao(

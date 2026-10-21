@@ -3,8 +3,8 @@ import json
 
 import pytest
 
-from iai.app.mcp_server import contexto_do_ambiente, criar_servidor
-from iai.app.storage import get_db
+from iai.app.core.infra.storage import get_db
+from iai.app.extras.mcp_server import contexto_do_ambiente, criar_servidor
 from tests_helpers import context_for
 
 
