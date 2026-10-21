@@ -9,8 +9,10 @@ from fastapi import HTTPException
 from pymongo import ReturnDocument
 from pymongo.errors import DuplicateKeyError
 
-from iai.app.core.inventra.business import gateway
 from iai.app.core.config import BUSINESS_MODE, business_date
+from iai.app.core.infra.security import RequestContext, require_supervisor
+from iai.app.core.infra.storage import get_db
+from iai.app.core.inventra.business import gateway
 from iai.app.core.inventra.domain import (
     ROLE_OPERATIONS,
     Action,
@@ -18,8 +20,6 @@ from iai.app.core.inventra.domain import (
     Operation,
     ProposalInput,
 )
-from iai.app.core.infra.security import RequestContext, require_supervisor
-from iai.app.core.infra.storage import get_db
 
 PENDING = "AGUARDANDO_APROVACAO"
 TERMINAL = {"CONCLUIDA", "RECUSADA", "FALHOU", "EXPIRADA", "RESULTADO_INCERTO"}

@@ -18,6 +18,7 @@ from iai.app.core.config import (
     REQUISICOES_POR_USUARIO_SEMANA,
     VALOR_POR_RESOLUCAO_USD,
 )
+from iai.app.core.infra.storage import CollectionProxy
 from iai.app.core.schemas import (
     Cenario,
     Custo,
@@ -30,7 +31,6 @@ from iai.app.core.schemas import (
     Resolucao,
     Roi,
 )
-from iai.app.core.infra.storage import CollectionProxy
 
 # Sem I/O no import; o índice é criado em storage.initialize_storage.
 col_metricas = CollectionProxy("metrics")

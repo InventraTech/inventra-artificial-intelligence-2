@@ -1,5 +1,6 @@
 from fastapi import APIRouter, Query
 
+from iai.app.core.infra.security import Authenticated, require_supervisor
 from iai.app.core.inventra.approvals import (
     create_proposal,
     decide,
@@ -9,7 +10,6 @@ from iai.app.core.inventra.approvals import (
     public,
 )
 from iai.app.core.inventra.domain import DecisionInput, ProposalInput
-from iai.app.core.infra.security import Authenticated, require_supervisor
 
 router = APIRouter(prefix="/approvals", tags=["aprovações"])
 

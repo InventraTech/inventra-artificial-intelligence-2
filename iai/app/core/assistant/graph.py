@@ -7,7 +7,6 @@ from langchain_core.prompts import ChatPromptTemplate
 from langchain_core.runnables import RunnableConfig
 from langgraph.graph import END, StateGraph
 
-from iai.app.core.config import BUSINESS_MODE, LLM_MODE
 from iai.app.core.assistant.guardrail import (
     anonimizar_entrada,
     guardrail_escopo,
@@ -29,7 +28,6 @@ from iai.app.core.assistant.memory import (
     salvar_mensagem,
     salvar_mensagem_juiz,
 )
-from iai.app.core.infra.metrics import ColetorMetricas, registrar_requisicao
 from iai.app.core.assistant.prompts import (
     COMPRADOR_SYSTEM_PROMPT,
     ESTOQUISTA_SYSTEM_PROMPT,
@@ -38,8 +36,10 @@ from iai.app.core.assistant.prompts import (
     ROTEADOR_SYSTEM_PROMPT,
     SUPERVISOR_SYSTEM_PROMPT,
 )
-from iai.app.core.schemas import Estado
+from iai.app.core.config import BUSINESS_MODE, LLM_MODE
+from iai.app.core.infra.metrics import ColetorMetricas, registrar_requisicao
 from iai.app.core.infra.security import context
+from iai.app.core.schemas import Estado
 from iai.app.core.tools.faq import faq_retriever
 from iai.app.core.tools.memoria import TOOLS_MEMORIA
 from iai.app.core.tools.operational import BUY_TOOLS, STOCK_TOOLS, SUPERVISOR_TOOLS

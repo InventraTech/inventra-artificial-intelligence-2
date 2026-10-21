@@ -1,9 +1,9 @@
 import httpx
 from pydantic import SecretStr
 
+from iai.app.core.infra.security import Identity, RequestContext
 from iai.app.core.inventra.business import MockGateway, SpringGateway
 from iai.app.core.inventra.domain import Query
-from iai.app.core.infra.security import Identity, RequestContext
 from tests_helpers import context_for
 
 

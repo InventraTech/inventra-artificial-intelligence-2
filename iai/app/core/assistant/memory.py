@@ -8,8 +8,8 @@ from pymongo.errors import DuplicateKeyError
 
 from iai.app.core.config import LLM_MODE
 from iai.app.core.infra.retrieval import rank
-from iai.app.core.schemas import MensagemHistorico, SessaoResumo
 from iai.app.core.infra.storage import CollectionProxy
+from iai.app.core.schemas import MensagemHistorico, SessaoResumo
 
 col_sessoes = CollectionProxy("sessions")
 sessoes_ativas: dict = {}

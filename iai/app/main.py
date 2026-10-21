@@ -6,7 +6,6 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from pymongo.errors import PyMongoError
 
-from iai.app.core.inventra.approvals import expire_pending
 from iai.app.core.config import (
     AUTH_MODE,
     BUSINESS_MODE,
@@ -14,8 +13,9 @@ from iai.app.core.config import (
     LLM_MODE,
     STORAGE_MODE,
 )
-from iai.app.core.routes import approvals, chat, metrics, queries
 from iai.app.core.infra.storage import get_db, initialize_storage
+from iai.app.core.inventra.approvals import expire_pending
+from iai.app.core.routes import approvals, chat, metrics, queries
 
 
 async def expiration_worker():

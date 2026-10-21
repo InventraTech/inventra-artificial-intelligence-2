@@ -2,9 +2,9 @@
 
 import pytest
 
+from iai.app.core.infra.storage import get_db
 from iai.app.core.inventra.business import MockGateway
 from iai.app.core.inventra.domain import Query
-from iai.app.core.infra.storage import get_db
 from tests_helpers import approved, context_for
 
 

@@ -10,9 +10,9 @@ import httpx
 from pymongo import ReturnDocument
 
 from iai.app.core.config import API_URL, BUSINESS_MODE, HTTP_TIMEOUT, business_date
-from iai.app.core.inventra.domain import Action, Operation, Query, ToolResult
 from iai.app.core.infra.security import RequestContext
 from iai.app.core.infra.storage import get_db
+from iai.app.core.inventra.domain import Action, Operation, Query, ToolResult
 
 
 class BusinessGateway(Protocol):

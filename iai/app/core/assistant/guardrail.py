@@ -4,11 +4,11 @@ import unicodedata
 from langchain_core.prompts import ChatPromptTemplate
 
 from iai.app.core.assistant.llms import llm_guardrail, llm_rapido
-from iai.app.core.infra.privacy import SECRET_PATTERN, remove_secrets
 from iai.app.core.assistant.prompts import (
     GUARDRAIL_ENTRADA_SYSTEM_PROMPT,
     GUARDRAIL_INSULTO_SYSTEM_PROMPT,
 )
+from iai.app.core.infra.privacy import SECRET_PATTERN, remove_secrets
 from iai.app.core.schemas import ResultadoGuardrail
 
 TERMOS_PROIBIDOS = [

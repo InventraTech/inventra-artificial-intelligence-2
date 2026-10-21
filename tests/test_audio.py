@@ -54,9 +54,9 @@ def test_rota_transcreve_e_usa_o_fluxo_do_chat(monkeypatch):
     from fastapi.testclient import TestClient
 
     from iai.app.core.assistant import graph
-    from iai.app.main import app
-    from iai.app.core.routes import chat
     from iai.app.core.infra.security import context
+    from iai.app.core.routes import chat
+    from iai.app.main import app
 
     monkeypatch.setattr(
         chat, "transcrever_audio", lambda conteudo, nome: "quanto tenho de arroz"

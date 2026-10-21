@@ -8,9 +8,15 @@ from langchain_core.tools import StructuredTool, tool
 from pydantic import Field, ValidationError, create_model
 from pymongo.errors import PyMongoError
 
-from iai.app.core.inventra.approvals import create_proposal, get_proposal, list_proposals, public
-from iai.app.core.inventra.business import gateway
 from iai.app.core.config import STORAGE_MODE
+from iai.app.core.infra.security import context
+from iai.app.core.inventra.approvals import (
+    create_proposal,
+    get_proposal,
+    list_proposals,
+    public,
+)
+from iai.app.core.inventra.business import gateway
 from iai.app.core.inventra.domain import (
     BUY_OPERATIONS,
     PARAMETERS,
@@ -21,7 +27,6 @@ from iai.app.core.inventra.domain import (
     Query,
     ToolResult,
 )
-from iai.app.core.infra.security import context
 
 
 @tool(args_schema=Query)

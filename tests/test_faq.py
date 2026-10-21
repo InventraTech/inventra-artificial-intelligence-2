@@ -4,8 +4,8 @@ import os
 import pytest
 from pydantic import SecretStr
 
-from iai.app.core.config import FAQ_PATH
 from iai.app.core.assistant.graph import executar_fluxo_assessor
+from iai.app.core.config import FAQ_PATH
 from iai.app.core.tools.faq import faq_retriever
 
 PRECISA_CHAVES_LLM = pytest.mark.skipif(
@@ -25,7 +25,11 @@ PRECISA_CHAVES_LLM = pytest.mark.skipif(
 @pytest.fixture
 def real_llm_context(monkeypatch):
     from iai.app.core.assistant import graph
-    from iai.app.core.infra.security import DEMO_IDENTITIES, RequestContext, current_context
+    from iai.app.core.infra.security import (
+        DEMO_IDENTITIES,
+        RequestContext,
+        current_context,
+    )
 
     monkeypatch.setattr(graph, "LLM_MODE", "live")
     marker = current_context.set(

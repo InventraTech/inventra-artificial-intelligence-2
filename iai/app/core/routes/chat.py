@@ -4,8 +4,15 @@ from typing import Annotated
 
 from fastapi import APIRouter, File, Form, HTTPException, Query, UploadFile
 
-from iai.app.extras.audio import TAMANHO_MAXIMO_BYTES, transcrever_audio
-from iai.app.core.assistant.memory import encerrar_sessao, recuperar_historico, recuperar_mensagem
+from iai.app.core.assistant.memory import (
+    encerrar_sessao,
+    recuperar_historico,
+    recuperar_mensagem,
+)
+from iai.app.core.infra.security import (
+    Authenticated,
+    current_context,
+)
 from iai.app.core.schemas import (
     ChatAudioResponse,
     ChatRequest,
@@ -15,10 +22,7 @@ from iai.app.core.schemas import (
     HistoricoResponse,
     MensagensResponse,
 )
-from iai.app.core.infra.security import (
-    Authenticated,
-    current_context,
-)
+from iai.app.extras.audio import TAMANHO_MAXIMO_BYTES, transcrever_audio
 
 router = APIRouter(tags=["chat"])
 

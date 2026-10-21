@@ -4,7 +4,6 @@ from datetime import UTC
 
 import pytest
 
-from iai.app.core.inventra.domain import Operation
 from iai.app.core.assistant.guardrail import anonimizar_entrada
 from iai.app.core.assistant.memory import (
     iniciar_sessao,
@@ -14,6 +13,7 @@ from iai.app.core.assistant.memory import (
 )
 from iai.app.core.infra.security import current_context
 from iai.app.core.infra.storage import get_db
+from iai.app.core.inventra.domain import Operation
 from iai.app.core.tools.operational import (
     PROPOSAL_TOOLS,
     consultar_inventra,

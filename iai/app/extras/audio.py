@@ -4,9 +4,9 @@ from pathlib import PurePath
 from fastapi import HTTPException
 from groq import Groq, GroqError
 
-from iai.app.core.config import GROQ_API_KEY
 from iai.app.core.assistant.llms import modelo_transcricao
 from iai.app.core.assistant.prompts import PROMPT_TRANSCRICAO
+from iai.app.core.config import GROQ_API_KEY
 
 TAMANHO_MAXIMO_BYTES = 10 * 1024 * 1024
 EXTENSOES_ACEITAS = {".webm", ".ogg", ".mp3", ".m4a", ".mp4", ".wav", ".mpeg", ".mpga"}

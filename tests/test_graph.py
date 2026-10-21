@@ -306,7 +306,11 @@ def registros(monkeypatch):
     """Autentica como estoquista demo e captura o que seria registrado como métrica."""
     from pydantic import SecretStr
 
-    from iai.app.core.infra.security import DEMO_IDENTITIES, RequestContext, current_context
+    from iai.app.core.infra.security import (
+        DEMO_IDENTITIES,
+        RequestContext,
+        current_context,
+    )
 
     capturados = []
     monkeypatch.setattr(
