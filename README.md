@@ -141,7 +141,7 @@ Não há implementação de A2A.
 ## Servidor MCP
 
 As mesmas tools dos agentes podem ser usadas por Cursor, Cline ou qualquer cliente MCP, sem
-subir a API. O servidor (`iai/app/mcp_server.py`) usa transporte **stdio**: o cliente inicia o
+subir a API. O servidor (`iai/app/extras/mcp_server.py`) usa transporte **stdio**: o cliente inicia o
 processo e conversa por entrada/saída padrão (não há porta nem URL).
 
 - **Identidade:** vem de `IAI_MCP_TOKEN` (JWT do Spring), validado como no `/chat`. Cada
@@ -159,7 +159,7 @@ caminhos absolutos da **sua** máquina (`python -c "import sys; print(sys.execut
   "mcpServers": {
     "assessor-inventra": {
       "command": "C:\\caminho\\para\\python.exe",
-      "args": ["C:\\caminho\\para\\inventra-artificial-intelligence-2\\iai\\app\\mcp_server.py"],
+      "args": ["C:\\caminho\\para\\inventra-artificial-intelligence-2\\iai\\app\\extras\\mcp_server.py"],
       "env": { "IAI_MCP_TOKEN": "<JWT do Spring>" }
     }
   }

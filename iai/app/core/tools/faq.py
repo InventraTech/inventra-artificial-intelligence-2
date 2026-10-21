@@ -2,8 +2,8 @@ import json
 
 from langchain_core.tools import tool
 
-from iai.app.config import FAQ_PATH
-from iai.app.retrieval import rank
+from iai.app.core.config import FAQ_PATH
+from iai.app.core.infra.retrieval import rank
 
 
 @tool

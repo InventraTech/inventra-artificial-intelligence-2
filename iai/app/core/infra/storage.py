@@ -4,7 +4,7 @@ from functools import lru_cache
 
 from pymongo import MongoClient
 
-from iai.app.config import MONGO_CONNECTION, STORAGE_MODE
+from iai.app.core.config import MONGO_CONNECTION, STORAGE_MODE
 
 
 @lru_cache(maxsize=1)

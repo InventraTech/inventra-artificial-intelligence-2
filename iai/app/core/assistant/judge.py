@@ -3,9 +3,9 @@ from collections.abc import Sequence
 from langchain_core.messages import BaseMessage
 from langchain_core.prompts import ChatPromptTemplate
 
-from iai.app.llms import llm_rapido
-from iai.app.prompts import JUIZ_ALUCINACAO_SYSTEM_PROMPT
-from iai.app.schemas import ResultadoJuiz
+from iai.app.core.assistant.llms import llm_rapido
+from iai.app.core.assistant.prompts import JUIZ_ALUCINACAO_SYSTEM_PROMPT
+from iai.app.core.schemas import ResultadoJuiz
 
 MAX_TENTATIVAS_JUIZ = 3
 

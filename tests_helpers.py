@@ -4,9 +4,9 @@ import uuid
 
 from pydantic import SecretStr
 
-from iai.app.approvals import create_proposal, decide
-from iai.app.domain import ROLE_OPERATIONS, Action, DecisionInput, ProposalInput
-from iai.app.security import DEMO_IDENTITIES, RequestContext
+from iai.app.core.inventra.approvals import create_proposal, decide
+from iai.app.core.inventra.domain import ROLE_OPERATIONS, Action, DecisionInput, ProposalInput
+from iai.app.core.infra.security import DEMO_IDENTITIES, RequestContext
 
 
 def context_for(token="demo-estoquista"):

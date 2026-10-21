@@ -7,14 +7,14 @@ from langchain_core.prompts import ChatPromptTemplate
 from langchain_core.runnables import RunnableConfig
 from langgraph.graph import END, StateGraph
 
-from iai.app.config import BUSINESS_MODE, LLM_MODE
-from iai.app.guardrail import (
+from iai.app.core.config import BUSINESS_MODE, LLM_MODE
+from iai.app.core.assistant.guardrail import (
     anonimizar_entrada,
     guardrail_escopo,
     guardrail_insulto,
     guardrail_saida,
 )
-from iai.app.judge import (
+from iai.app.core.assistant.judge import (
     FATOS_VAZIOS,
     LIMIAR_CONFIANCA_JUIZ,
     MAX_TENTATIVAS_JUIZ,
@@ -22,15 +22,15 @@ from iai.app.judge import (
     extrair_pergunta_fatos_e_resposta,
     ultima_mensagem_ai,
 )
-from iai.app.llms import llm_especialista, llm_rapido
-from iai.app.memory import (
+from iai.app.core.assistant.llms import llm_especialista, llm_rapido
+from iai.app.core.assistant.memory import (
     iniciar_sessao,
     mensagens_ativas,
     salvar_mensagem,
     salvar_mensagem_juiz,
 )
-from iai.app.metrics import ColetorMetricas, registrar_requisicao
-from iai.app.prompts import (
+from iai.app.core.infra.metrics import ColetorMetricas, registrar_requisicao
+from iai.app.core.assistant.prompts import (
     COMPRADOR_SYSTEM_PROMPT,
     ESTOQUISTA_SYSTEM_PROMPT,
     FAQ_SYSTEM_PROMPT,
@@ -38,11 +38,11 @@ from iai.app.prompts import (
     ROTEADOR_SYSTEM_PROMPT,
     SUPERVISOR_SYSTEM_PROMPT,
 )
-from iai.app.schemas import Estado
-from iai.app.security import context
-from iai.app.tools.faq import faq_retriever
-from iai.app.tools.memoria import TOOLS_MEMORIA
-from iai.app.tools.operational import BUY_TOOLS, STOCK_TOOLS, SUPERVISOR_TOOLS
+from iai.app.core.schemas import Estado
+from iai.app.core.infra.security import context
+from iai.app.core.tools.faq import faq_retriever
+from iai.app.core.tools.memoria import TOOLS_MEMORIA
+from iai.app.core.tools.operational import BUY_TOOLS, STOCK_TOOLS, SUPERVISOR_TOOLS
 
 
 def extrair_texto(mensagem: BaseMessage) -> str:
@@ -155,7 +155,7 @@ def no_roteador(estado: Estado, config: RunnableConfig) -> dict:
     texto = extrair_texto(saida["messages"][-1])
 
     if "ROUTE=" not in texto:
-        from iai.app.guardrail import normalizar_texto
+        from iai.app.core.assistant.guardrail import normalizar_texto
 
         greeting = normalizar_texto(extrair_texto(estado["messages"][-1])).strip(
             " .!?\n"
@@ -441,11 +441,11 @@ def executar_fluxo_assessor(
     output: dict = {}
     try:
         if LLM_MODE == "demo":
-            from iai.app.demo import demo_graph
+            from iai.app.extras.demo import demo_graph
 
             output = demo_graph.invoke(estado_inicial)
         else:
-            from iai.app.config import GEMINI_API_KEY, GROQ_API_KEY
+            from iai.app.core.config import GEMINI_API_KEY, GROQ_API_KEY
 
             if (
                 not GROQ_API_KEY.get_secret_value()
@@ -503,7 +503,7 @@ def executar_fluxo_assessor(
             response = "[DADOS OPERACIONAIS MOCK — demonstração]\n" + response
         if LLM_MODE == "demo":
             response = "[INTERPRETAÇÃO DEMO limitada — sem LLM]\n" + response
-        from iai.app.privacy import remove_secrets
+        from iai.app.core.infra.privacy import remove_secrets
 
         response = remove_secrets(response)
         anonymous, _ = anonimizar_entrada(pergunta_usuario)

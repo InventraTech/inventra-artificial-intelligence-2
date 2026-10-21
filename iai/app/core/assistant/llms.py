@@ -2,7 +2,7 @@ from langchain_google_genai import ChatGoogleGenerativeAI
 from langchain_groq import ChatGroq
 from pydantic import SecretStr
 
-from iai.app.config import GEMINI_API_KEY, GROQ_API_KEY
+from iai.app.core.config import GEMINI_API_KEY, GROQ_API_KEY
 
 
 def chave_ou_aviso(chave: SecretStr) -> SecretStr:

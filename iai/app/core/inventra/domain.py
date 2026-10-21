@@ -227,7 +227,7 @@ class ProposalInput(StrictModel):
     def no_credentials(self):
         import json
 
-        from iai.app.privacy import remove_secrets
+        from iai.app.core.infra.privacy import remove_secrets
 
         serialized = json.dumps(self.model_dump(mode="json"), ensure_ascii=False)
         if serialized != remove_secrets(serialized):
@@ -244,7 +244,7 @@ class DecisionInput(StrictModel):
 
     @model_validator(mode="after")
     def no_credentials(self):
-        from iai.app.privacy import remove_secrets
+        from iai.app.core.infra.privacy import remove_secrets
 
         if self.reason and remove_secrets(self.reason) != self.reason:
             raise ValueError("Não inclua tokens ou senhas na decisão.")
@@ -291,7 +291,7 @@ class Query(StrictModel):
         if self.resource in {"itens_requisicao", "contagens"} and not self.record_id:
             raise ValueError("Informe record_id da requisição/inventário.")
         if (
-            self.resource in {"estoque", "fornecedores_produto", "parametros_produto"}
+            self.resource in {"fornecedores_produto", "parametros_produto"}
             and not self.product_id
         ):
             raise ValueError(

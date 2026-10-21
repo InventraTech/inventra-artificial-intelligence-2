@@ -9,7 +9,7 @@ from fastapi import Depends, HTTPException
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from pydantic import BaseModel, ConfigDict, Field, SecretStr
 
-from iai.app.config import API_URL, AUTH_MODE, HTTP_TIMEOUT
+from iai.app.core.config import API_URL, AUTH_MODE, HTTP_TIMEOUT
 
 
 class Identity(BaseModel):
@@ -106,7 +106,7 @@ def authenticate(
             role = data["profile"]["accessType"].upper()
             if role not in {"SUPERVISOR", "ESTOQUISTA", "COMPRADOR"}:
                 raise HTTPException(403, "Perfil não autorizado.")
-            from iai.app.privacy import remove_secrets
+            from iai.app.core.infra.privacy import remove_secrets
 
             identity = Identity(
                 user_id=data["id"],

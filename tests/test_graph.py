@@ -3,8 +3,8 @@ from types import SimpleNamespace
 import pytest
 from langchain_core.messages import AIMessage, HumanMessage, ToolMessage
 
-import iai.app.graph as g
-from iai.app.schemas import ResultadoJuiz
+import iai.app.core.assistant.graph as g
+from iai.app.core.schemas import ResultadoJuiz
 
 
 def test_extrair_texto_com_string():
@@ -306,7 +306,7 @@ def registros(monkeypatch):
     """Autentica como estoquista demo e captura o que seria registrado como métrica."""
     from pydantic import SecretStr
 
-    from iai.app.security import DEMO_IDENTITIES, RequestContext, current_context
+    from iai.app.core.infra.security import DEMO_IDENTITIES, RequestContext, current_context
 
     capturados = []
     monkeypatch.setattr(
@@ -348,7 +348,7 @@ def test_executar_fluxo_assessor_registra_metricas_da_requisicao(registros):
 def test_executar_fluxo_assessor_registra_erro_e_responde_502(registros, monkeypatch):
     from fastapi import HTTPException
 
-    from iai.app.demo import demo_graph
+    from iai.app.extras.demo import demo_graph
 
     def quebra(*_a, **_k):
         raise RuntimeError("falha no grafo")

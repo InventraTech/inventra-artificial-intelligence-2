@@ -8,10 +8,10 @@ from langchain_core.tools import StructuredTool, tool
 from pydantic import Field, ValidationError, create_model
 from pymongo.errors import PyMongoError
 
-from iai.app.approvals import create_proposal, get_proposal, list_proposals, public
-from iai.app.business import gateway
-from iai.app.config import STORAGE_MODE
-from iai.app.domain import (
+from iai.app.core.inventra.approvals import create_proposal, get_proposal, list_proposals, public
+from iai.app.core.inventra.business import gateway
+from iai.app.core.config import STORAGE_MODE
+from iai.app.core.inventra.domain import (
     BUY_OPERATIONS,
     PARAMETERS,
     STOCK_OPERATIONS,
@@ -21,12 +21,12 @@ from iai.app.domain import (
     Query,
     ToolResult,
 )
-from iai.app.security import context
+from iai.app.core.infra.security import context
 
 
 @tool(args_schema=Query)
 def consultar_inventra(**parameters) -> str:
-    """Consulta produtos, estoque, lotes, validade, fornecedores, requisições, inventários, alertas e catálogos autorizados. Não altera dados."""
+    """Consulta produtos, estoque, lotes, validade, fornecedores, requisições, inventários, alertas e catálogos autorizados. Não altera dados. Para o saldo geral do estoque da cozinha use resource=estoque sem product_id; com product_id retorna os parâmetros e o saldo daquele produto."""
     try:
         outcome = gateway().query(Query.model_validate(parameters), context())
         return outcome.model_dump_json()

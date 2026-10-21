@@ -6,7 +6,7 @@ from urllib.parse import urlsplit
 from dotenv import load_dotenv
 from pydantic import SecretStr
 
-BASE_DIR = Path(__file__).resolve().parent.parent
+BASE_DIR = Path(__file__).resolve().parents[2]
 DATA_DIR = BASE_DIR / "data"
 FRONTEND_DIR = BASE_DIR / "frontend"
 FAQ_PATH = DATA_DIR / "faq_inventra.jsonl"

@@ -10,7 +10,7 @@ from langchain_core.callbacks import BaseCallbackHandler
 from langchain_core.outputs import LLMResult
 from pymongo.errors import PyMongoError
 
-from iai.app.config import (
+from iai.app.core.config import (
     CENARIOS_USUARIOS_SEMANAIS,
     LLM_MODE,
     PERIODOS,
@@ -18,7 +18,7 @@ from iai.app.config import (
     REQUISICOES_POR_USUARIO_SEMANA,
     VALOR_POR_RESOLUCAO_USD,
 )
-from iai.app.schemas import (
+from iai.app.core.schemas import (
     Cenario,
     Custo,
     CustoModelo,
@@ -30,7 +30,7 @@ from iai.app.schemas import (
     Resolucao,
     Roi,
 )
-from iai.app.storage import CollectionProxy
+from iai.app.core.infra.storage import CollectionProxy
 
 # Sem I/O no import; o índice é criado em storage.initialize_storage.
 col_metricas = CollectionProxy("metrics")

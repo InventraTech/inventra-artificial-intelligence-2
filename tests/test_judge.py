@@ -2,15 +2,15 @@ from types import SimpleNamespace
 
 from langchain_core.messages import AIMessage, HumanMessage, ToolMessage
 
-import iai.app.judge as judge_module
-from iai.app.judge import (
+import iai.app.core.assistant.judge as judge_module
+from iai.app.core.assistant.judge import (
     FATOS_VAZIOS,
     LIMIAR_CONFIANCA_JUIZ,
     avaliar_alucinacao,
     extrair_pergunta_fatos_e_resposta,
     ultima_mensagem_ai,
 )
-from iai.app.schemas import ResultadoJuiz
+from iai.app.core.schemas import ResultadoJuiz
 
 
 def test_extrair_pergunta_fatos_e_resposta_rodada_simples():

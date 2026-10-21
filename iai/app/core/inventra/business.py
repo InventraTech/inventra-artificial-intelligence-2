@@ -9,10 +9,10 @@ from typing import Protocol
 import httpx
 from pymongo import ReturnDocument
 
-from iai.app.config import API_URL, BUSINESS_MODE, HTTP_TIMEOUT, business_date
-from iai.app.domain import Action, Operation, Query, ToolResult
-from iai.app.security import RequestContext
-from iai.app.storage import get_db
+from iai.app.core.config import API_URL, BUSINESS_MODE, HTTP_TIMEOUT, business_date
+from iai.app.core.inventra.domain import Action, Operation, Query, ToolResult
+from iai.app.core.infra.security import RequestContext
+from iai.app.core.infra.storage import get_db
 
 
 class BusinessGateway(Protocol):
@@ -65,7 +65,7 @@ def redact_secrets(value):
     if isinstance(value, list):
         return [redact_secrets(item) for item in value]
     if isinstance(value, str):
-        from iai.app.privacy import remove_secrets
+        from iai.app.core.infra.privacy import remove_secrets
 
         return remove_secrets(value)
     return value
@@ -152,13 +152,18 @@ class SpringGateway:
             params = {} if query.record_id else {"kitchenId": k}
             if resource == "alertas":
                 params["unread"] = query.unread
+        expected = resource
+        if resource == "estoque" and not query.product_id:
+            # Saldo geral da cozinha (mesmo endpoint do app): total ativo por produto.
+            paths[resource] = f"/api/kitchens/{k}/stock"
+            expected = "estoque_cozinha"
         out = self._request(
-            "GET", paths[resource], ctx, params=params, expected=resource
+            "GET", paths[resource], ctx, params=params, expected=expected
         )
         if not out.ok:
             return out
         # Filtros locais somente sobre dados já autorizados; não inventar filtros HTTP.
-        from iai.app.retrieval import normalize
+        from iai.app.core.infra.retrieval import normalize
 
         data = out.data
         rows = data.get("content", [data]) if isinstance(data, dict) else data
@@ -175,7 +180,12 @@ class SpringGateway:
                 r
                 for r in rows
                 if normalize(query.name)
-                in normalize(r.get("name", r.get("legalName", "")))
+                in normalize(
+                    r.get(
+                        "name",
+                        r.get("legalName", (r.get("product") or {}).get("name", "")),
+                    )
+                )
             ]
         if query.status:
             rows = [r for r in rows if r.get("status") == query.status]
@@ -346,6 +356,7 @@ class SpringGateway:
                 "parametros_produto": {"kitchen", "minStock", "currentQuantity"},
                 "fornecedores_produto": {"supplier"},
                 "estoque": {"currentQuantity", "minStock"},
+                "estoque_cozinha": {"product", "totalQuantity"},
                 "estoque_minimo": {"productId", "currentQuantity"},
                 "lotes": {"id", "product", "currentQuantity", "status"},
                 "validade": {
@@ -628,7 +639,7 @@ class MockGateway:
         if q.record_id and q.resource not in {"itens_requisicao", "contagens"}:
             rows = [r for r in rows if r.get("id") == q.record_id]
         if q.name:
-            from iai.app.retrieval import normalize
+            from iai.app.core.infra.retrieval import normalize
 
             rows = [
                 r
