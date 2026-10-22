@@ -34,7 +34,9 @@ def test_tool_retries_in_same_turn_create_only_one_proposal():
         assert get_db().approvals.count_documents({}) == 1
         assert get_db().execution_mock.count_documents({}) == 0
         assert "Parâmetros incompletos" in tool.invoke({"quantity": 10})
-        assert json.loads(consultar_inventra.invoke({"resource": "produtos"}))["mocked"]
+        assert json.loads(
+            consultar_inventra.invoke({"resource": "produtos", "name": "Arroz"})
+        )["mocked"]
         persisted = json.loads(
             consultar_solicitacoes_iai.invoke(
                 {"solicitacao_id": first["proposal"]["id"]}
@@ -124,3 +126,9 @@ def test_message_lookup_requires_identity_and_same_session_does_not_share_data()
     assert recuperar_mensagem(identifier, "v", 1) == []
     with pytest.raises(HTTPException):
         recuperar_mensagem(identifier)
+
+
+def test_catalogo_global_nao_e_listado_sem_filtro():
+    resposta = json.loads(consultar_inventra.invoke({"resource": "produtos"}))
+    assert resposta["ok"] is False and resposta["code"] == "USE_ESTOQUE"
+    assert "estoque" in resposta["message"]

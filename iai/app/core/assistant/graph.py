@@ -2,6 +2,7 @@ from time import perf_counter
 from typing import cast
 
 from langchain.agents import create_agent
+from langchain.agents.middleware import dynamic_prompt
 from langchain_core.messages import BaseMessage, HumanMessage, RemoveMessage
 from langchain_core.prompts import ChatPromptTemplate
 from langchain_core.runnables import RunnableConfig
@@ -35,6 +36,8 @@ from iai.app.core.assistant.prompts import (
     ORQUESTRADOR_SYSTEM_PROMPT,
     ROTEADOR_SYSTEM_PROMPT,
     SUPERVISOR_SYSTEM_PROMPT,
+    com_contexto_temporal,
+    contexto_temporal,
 )
 from iai.app.core.config import BUSINESS_MODE, LLM_MODE
 from iai.app.core.infra.metrics import ColetorMetricas, registrar_requisicao
@@ -58,35 +61,52 @@ def extrair_texto(mensagem: BaseMessage) -> str:
     return str(conteudo)
 
 
+def _prompt_com_data(prompt_base: str):
+    """Middleware que remonta o prompt de sistema a cada chamada, com data/hora atuais.
+
+    Um prompt fixo montado no import congelaria a data do momento em que o servidor subiu.
+    """
+
+    @dynamic_prompt
+    def _prompt(_request) -> str:
+        return com_contexto_temporal(prompt_base)
+
+    return _prompt
+
+
 router_app = create_agent(
-    model=llm_rapido, tools=TOOLS_MEMORIA, system_prompt=ROTEADOR_SYSTEM_PROMPT
+    model=llm_rapido,
+    tools=TOOLS_MEMORIA,
+    middleware=[_prompt_com_data(ROTEADOR_SYSTEM_PROMPT)],
 )
 
 orquestrador_prompt = ChatPromptTemplate.from_messages(
     [("system", ORQUESTRADOR_SYSTEM_PROMPT), ("human", "{mensagens}")]
-)
+).partial(contexto_temporal=contexto_temporal)
 orquestrador_app = orquestrador_prompt | llm_rapido
 
 estoquista_app = create_agent(  # type: ignore[call-overload]
     model=llm_especialista,
     tools=STOCK_TOOLS + TOOLS_MEMORIA + [faq_retriever],
-    system_prompt=ESTOQUISTA_SYSTEM_PROMPT,
+    middleware=[_prompt_com_data(ESTOQUISTA_SYSTEM_PROMPT)],
 )
 
 comprador_app = create_agent(  # type: ignore[call-overload]
     model=llm_especialista,
     tools=BUY_TOOLS + TOOLS_MEMORIA + [faq_retriever],
-    system_prompt=COMPRADOR_SYSTEM_PROMPT,
+    middleware=[_prompt_com_data(COMPRADOR_SYSTEM_PROMPT)],
 )
 
 supervisor_app = create_agent(  # type: ignore[call-overload]
     model=llm_especialista,
     tools=SUPERVISOR_TOOLS + TOOLS_MEMORIA + [faq_retriever],
-    system_prompt=SUPERVISOR_SYSTEM_PROMPT,
+    middleware=[_prompt_com_data(SUPERVISOR_SYSTEM_PROMPT)],
 )
 
 faq_app = create_agent(
-    model=llm_rapido, tools=[faq_retriever], system_prompt=FAQ_SYSTEM_PROMPT
+    model=llm_rapido,
+    tools=[faq_retriever],
+    middleware=[_prompt_com_data(FAQ_SYSTEM_PROMPT)],
 )
 
 
