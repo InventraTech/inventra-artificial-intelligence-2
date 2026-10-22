@@ -31,9 +31,23 @@ from iai.app.core.inventra.domain import (
 
 @tool(args_schema=Query)
 def consultar_inventra(**parameters) -> str:
-    """Consulta produtos, estoque, lotes, validade, fornecedores, requisições, inventários, alertas e catálogos autorizados. Não altera dados. Para o saldo geral do estoque da cozinha use resource=estoque sem product_id; com product_id retorna os parâmetros e o saldo daquele produto."""
+    """Consulta produtos, estoque, lotes, validade, fornecedores, requisições, inventários, alertas e catálogos autorizados. Não altera dados. Para o saldo geral do estoque da cozinha use resource=estoque sem product_id; com product_id retorna os parâmetros e o saldo daquele produto. O resource=produtos é o catálogo global e exige name."""
     try:
-        outcome = gateway().query(Query.model_validate(parameters), context())
+        query = Query.model_validate(parameters)
+        if query.resource == "produtos" and not (query.name or query.product_id):
+            # O catálogo é global (todas as cozinhas): nunca listar sem filtro.
+            return ToolResult(
+                ok=False,
+                code="USE_ESTOQUE",
+                message=(
+                    "O catálogo de produtos não é da cozinha. Para saber o que a cozinha tem, "
+                    "use resource=estoque (sem product_id). Use produtos apenas com name para "
+                    "localizar um produto específico."
+                ),
+                source="IAI",
+                mocked=False,
+            ).model_dump_json()
+        outcome = gateway().query(query, context())
         return outcome.model_dump_json()
     except PyMongoError:
         return ToolResult(
