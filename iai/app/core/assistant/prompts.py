@@ -1,16 +1,17 @@
-from datetime import datetime, timedelta, timezone, tzinfo
+from datetime import UTC, datetime, timedelta, timezone, tzinfo
+from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 try:
-    from zoneinfo import ZoneInfo
-
-    _FUSO_NEGOCIO: tzinfo = ZoneInfo("America/Sao_Paulo")
-except Exception:  # sem tzdata (ex.: Windows/slim): Brasília não tem horário de verão
-    _FUSO_NEGOCIO = timezone(timedelta(hours=-3), "BRT")
+    FUSO_NEGOCIO: tzinfo = ZoneInfo("America/Sao_Paulo")
+except (
+    ZoneInfoNotFoundError
+):  # sem tzdata (ex.: Windows/slim): Brasília não tem horário de verão
+    FUSO_NEGOCIO = timezone(timedelta(hours=-3), "BRT")
 
 
 def contexto_temporal(agora: datetime | None = None) -> str:
     """Bloco com a data e hora de AGORA (Brasília), calculado a cada chamada."""
-    momento = (agora or datetime.now(timezone.utc)).astimezone(_FUSO_NEGOCIO)
+    momento = (agora or datetime.now(UTC)).astimezone(FUSO_NEGOCIO)
     return f"""### CONTEXTO TEMPORAL
 Data e hora atual (fornecida pelo sistema): {momento:%d/%m/%Y %H:%M:%S} (horário de Brasília)
 Use esta referência para interpretar "hoje", "ontem", "amanhã", "semana passada" e para
