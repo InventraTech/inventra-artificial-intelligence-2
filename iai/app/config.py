@@ -12,14 +12,21 @@ FRONTEND_DIR = BASE_DIR / "frontend"
 FAQ_PATH = DATA_DIR / "faq_inventra.jsonl"
 
 load_dotenv(BASE_DIR / ".env")
+# Compatibilidade com a configuração local mantida junto ao código da aplicação.
+# Ambiente do processo e iai/.env têm prioridade; não copiar ou sobrescrever segredos.
+load_dotenv(BASE_DIR / "app" / ".env")
 
 GEMINI_API_KEY = SecretStr(os.getenv("GEMINI_API_KEY", ""))
 GROQ_API_KEY = SecretStr(os.getenv("GROQ_API_KEY", ""))
+TYPESAFE_API_KEY = SecretStr(os.getenv("TYPESAFE_API_KEY", ""))
+JEV_MODEL = os.getenv("JEV_MODEL", "jev-latest")
+JEV_HTTP_TIMEOUT = float(os.getenv("JEV_HTTP_TIMEOUT", "10"))
 MONGO_CONNECTION = SecretStr(os.getenv("MONGO_CONNECTION", "mongodb://localhost:27017"))
 
 OBRIGATORIAS = {
     "GEMINI_API_KEY": GEMINI_API_KEY,
     "GROQ_API_KEY": GROQ_API_KEY,
+    "TYPESAFE_API_KEY": TYPESAFE_API_KEY,
     "MONGO_CONNECTION": MONGO_CONNECTION,
 }
 

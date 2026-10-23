@@ -2,6 +2,7 @@ import os
 
 os.environ.setdefault("GEMINI_API_KEY", "test-key")
 os.environ.setdefault("GROQ_API_KEY", "test-key")
+os.environ.setdefault("TYPESAFE_API_KEY", "test-key")
 os.environ["IAI_AUTH_MODE"] = "mock"
 os.environ["IAI_BUSINESS_MODE"] = "mock"
 os.environ["IAI_STORAGE_MODE"] = "mock"

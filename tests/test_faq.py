@@ -12,10 +12,10 @@ PRECISA_CHAVES_LLM = pytest.mark.skipif(
     os.getenv("RUN_LLM_TESTS") != "1"
     or any(
         os.getenv(key) in (None, "", "test-key")
-        for key in ("GEMINI_API_KEY", "GROQ_API_KEY")
+        for key in ("GEMINI_API_KEY", "GROQ_API_KEY", "TYPESAFE_API_KEY")
     ),
     reason=(
-        "Chama o LLM de verdade (Gemini/Groq); o conftest.py força chaves fake para o "
+        "Chama Gemini/Groq e o juiz JEV de verdade; o conftest.py fornece chaves fake para o "
         "restante da suite, então esse teste só roda com RUN_LLM_TESTS=1 e chaves reais "
         "exportadas no ambiente antes do pytest iniciar."
     ),

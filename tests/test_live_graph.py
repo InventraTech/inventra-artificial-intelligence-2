@@ -8,7 +8,7 @@ from langchain.agents import create_agent
 from langchain_core.language_models.fake_chat_models import FakeMessagesListChatModel
 from langchain_core.messages import AIMessage
 
-from iai.app import graph
+from iai.app import graph, judge
 from iai.app.domain import Operation
 from iai.app.schemas import ResultadoJuiz
 from iai.app.security import current_context
@@ -72,6 +72,12 @@ def test_live_graph_executes_tools_and_proposes_without_executing(monkeypatch, p
     agent = create_agent(
         ScriptedModel(responses=responses),
         tools=[consultar_inventra, PROPOSAL_TOOLS[Operation.CONSUME]],
+        middleware=[judge.jev_antes_da_tool],
+    )
+    monkeypatch.setattr(
+        judge,
+        "avaliar_chamada_tool",
+        lambda *a: ResultadoJuiz(confianca=0.95, motivo="Chamada simulada aprovada"),
     )
     monkeypatch.setattr(graph, "LLM_MODE", "live")
     monkeypatch.setattr(graph, "estoquista_app", agent)

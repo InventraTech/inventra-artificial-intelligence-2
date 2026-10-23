@@ -19,6 +19,7 @@ from iai.app.judge import (
     MAX_TENTATIVAS_JUIZ,
     avaliar_alucinacao,
     extrair_pergunta_fatos_e_resposta,
+    jev_antes_da_tool,
     ultima_mensagem_ai,
 )
 from iai.app.llms import llm_especialista, llm_rapido
@@ -57,7 +58,10 @@ def extrair_texto(mensagem: BaseMessage) -> str:
 
 
 router_app = create_agent(
-    model=llm_rapido, tools=TOOLS_MEMORIA, system_prompt=ROTEADOR_SYSTEM_PROMPT
+    model=llm_rapido,
+    tools=TOOLS_MEMORIA,
+    system_prompt=ROTEADOR_SYSTEM_PROMPT,
+    middleware=[jev_antes_da_tool],
 )
 
 orquestrador_prompt = ChatPromptTemplate.from_messages(
@@ -69,22 +73,28 @@ estoquista_app = create_agent(  # type: ignore[call-overload]
     model=llm_especialista,
     tools=STOCK_TOOLS + TOOLS_MEMORIA + [faq_retriever],
     system_prompt=ESTOQUISTA_SYSTEM_PROMPT,
+    middleware=[jev_antes_da_tool],
 )
 
 comprador_app = create_agent(  # type: ignore[call-overload]
     model=llm_especialista,
     tools=BUY_TOOLS + TOOLS_MEMORIA + [faq_retriever],
     system_prompt=COMPRADOR_SYSTEM_PROMPT,
+    middleware=[jev_antes_da_tool],
 )
 
 supervisor_app = create_agent(  # type: ignore[call-overload]
     model=llm_especialista,
     tools=SUPERVISOR_TOOLS + TOOLS_MEMORIA + [faq_retriever],
     system_prompt=SUPERVISOR_SYSTEM_PROMPT,
+    middleware=[jev_antes_da_tool],
 )
 
 faq_app = create_agent(
-    model=llm_rapido, tools=[faq_retriever], system_prompt=FAQ_SYSTEM_PROMPT
+    model=llm_rapido,
+    tools=[faq_retriever],
+    system_prompt=FAQ_SYSTEM_PROMPT,
+    middleware=[jev_antes_da_tool],
 )
 
 
@@ -447,15 +457,16 @@ def executar_fluxo_assessor(
 
             output = demo_graph.invoke(estado_inicial)
         else:
-            from iai.app.config import GEMINI_API_KEY, GROQ_API_KEY
+            from iai.app.config import GEMINI_API_KEY, GROQ_API_KEY, TYPESAFE_API_KEY
 
             if (
                 not GROQ_API_KEY.get_secret_value()
                 or not GEMINI_API_KEY.get_secret_value()
+                or not TYPESAFE_API_KEY.get_secret_value()
             ):
                 raise HTTPException(
                     503,
-                    "Provedores LLM não configurados. Configure chaves ou habilite explicitamente o modo demo.",
+                    "Provedores não configurados. Configure GEMINI_API_KEY, GROQ_API_KEY e TYPESAFE_API_KEY ou habilite explicitamente o modo demo.",
                 )
             from langchain_core.callbacks import UsageMetadataCallbackHandler
 

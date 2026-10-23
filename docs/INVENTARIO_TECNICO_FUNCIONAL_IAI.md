@@ -87,7 +87,8 @@ flowchart TD
   P --> G[Anonimização e guardrails]
   G --> R[Roteador por intenção/contexto]
   R --> E[Estoquista, Comprador, Supervisor ou FAQ]
-  E --> T[Consultas ou criação de proposta]
+  E --> V[JEV valida ferramenta e parâmetros]
+  V -->|aprovado| T[Consultas ou criação de proposta]
   T --> J[Juiz compara resposta e fatos]
   J -->|reprovado, até 3 tentativas| E
   J -->|cargo aprovado| O[Orquestrador + nova conferência]
@@ -106,6 +107,14 @@ Questões de várias áreas seguem ao Supervisor, com consultas e FAQ.
 
 O juiz usa confiança mínima 0,7 e até três tentativas. A saída do orquestrador é
 conferida novamente; se ele alterar fatos, é preservada a resposta já validada.
+Desde a migração para JEV/TypeSafe, o campo `confianca` recebe o Noul: probabilidade
+de fundamentação factual, retornada pela API System One. A chave é `TYPESAFE_API_KEY`;
+`JEV_MODEL` seleciona o modelo (padrão `jev-latest`) e `JEV_HTTP_TIMEOUT` define o
+timeout (padrão 10 segundos). Motivos são códigos locais, sem explicação gerada.
+Falhas bloqueiam a validação, sem fallback para outro provedor. Demo não chama JEV.
+As tools propostas pelos agentes live também passam pelo JEV antes de executar.
+Essa validação usa intenção, contexto e parâmetros; não exige resultados ainda
+inexistentes de consultas. Chamadas reprovadas não chegam ao corpo da ferramenta.
 Confirmações de criação de proposta vêm do documento persistido, não do texto do modelo.
 Nenhum modelo recebe ferramenta para decidir ou executar uma aprovação.
 
@@ -121,12 +130,14 @@ A sessão é identificada pelo conjunto usuário/cozinha/session_id e pelo ID in
 - **Comprador:** consultas, FAQ, histórico e seis propostas de fornecedores/requisições.
 - **Supervisor:** consultas, FAQ, histórico e todas as 16 propostas; não decide pelo humano.
 - **FAQ:** apenas recuperação documental.
-- **Juiz/orquestrador/resumo:** verificam fatos, formatam e resumem; não aprovam operações.
+- **Juiz JEV/TypeSafe:** verifica fundamentação factual; não aprova operações de negócio.
+- **Orquestrador/resumo:** formatam e resumem; não aprovam operações.
 
 Modelos preservados: Gemini gemini-2.5-flash (especialistas) com fallback Groq;
-Groq openai/gpt-oss-20b (roteador/FAQ/juiz/formatação/resumo);
+Groq openai/gpt-oss-20b (roteador/FAQ/formatação/resumo);
 Groq openai/gpt-oss-safeguard-20b (moderação).
-Modo live exige chaves; placeholders de construção não habilitam chamadas reais.
+O juiz agora usa JEV/TypeSafe pela API HTTP; o modo live exige também TYPESAFE_API_KEY.
+Placeholders de construção não habilitam chamadas reais.
 Temperaturas e divisão de provedores foram preservadas.
 
 **Demo:** não usa esses modelos. Demonstra consumo em kg com algumas variações e múltiplos
@@ -271,6 +282,7 @@ Custo só é estimado com IAI_MODEL_PRICES_JSON completa (USD por milhão input/
 sem dados/tabela, fica nulo. Não equivale a fatura. Não há preço de mercado presumido.
 Falhas inesperadas do SDK retornam erro neutro, com tipo da exceção nas métricas;
 não expõem mensagens de exceção que possam conter credenciais.
+As métricas de usage_metadata dos agentes LangChain não incluem tokens/custo do JEV HTTP.
 Projeções de receita, resolução de negócio e latência individual por nó não foram
 implementadas; o status ok significa execução técnica do chat, não compra/baixa concluída.
 

@@ -89,6 +89,10 @@ Operações em itens/lotes distintos são propostas independentes, sem atomicida
 Por padrão, sem configuração demo, os modos são `spring/spring/mongo/live`.
 Configure em ambiente ou `iai/.env`:
 
+Por compatibilidade, `iai/app/.env` também é carregado para variáveis ainda não
+definidas. A prioridade é: ambiente do processo, `iai/.env`, `iai/app/.env`.
+Ambos os arquivos locais são ignorados pelo Git e pelo build Docker.
+
 | Variável | Uso |
 |---|---|
 | IAI_AUTH_MODE | mock ou spring |
@@ -99,8 +103,32 @@ Configure em ambiente ou `iai/.env`:
 | INVENTRA_HTTP_TIMEOUT | segundos; padrão 10 |
 | MONGO_CONNECTION | MongoDB; não inclua credenciais no Git |
 | GEMINI_API_KEY / GROQ_API_KEY | provedores para agentes live |
+| TYPESAFE_API_KEY | autenticação do juiz JEV/TypeSafe no modo live |
+| JEV_MODEL | modelo do juiz; padrão jev-latest |
+| JEV_HTTP_TIMEOUT | timeout do juiz em segundos; padrão 10 |
 | CORS_ORIGINS | origens exatas do frontend, separadas por vírgula |
 | IAI_MODEL_PRICES_JSON | tabela opcional por modelo, input/output em USD por milhão |
+
+O juiz usa a [API System One da TypeSafe](https://docs.typesafe.ai/api/system-one).
+No fluxo live, cada chamada de tool proposta pelo modelo é validada pelo JEV antes
+da execução: pergunta/contexto, ferramenta e parâmetros são avaliados sem executar
+a tool. Reprovação ou erro bloqueiam a chamada. A conferência factual da resposta
+final continua depois das tools, usando os resultados já obtidos. A aprovação do
+JEV não substitui as permissões da API nem a aprovação humana das propostas.
+As avaliações usam `POST https://api.typesafe.ai/v1/systemone`. Na conferência da
+resposta, envia pergunta, fatos das tools e resposta como `state`, com uma questão
+`noul` sobre fundamentação factual.
+O Noul é a probabilidade de a resposta estar fundamentada; alimenta o campo
+`confianca` existente, com limiar de 0,7 e até três tentativas de correção.
+Os motivos de aprovação/reprovação são códigos locais: JEV não gera explicações
+textuais. Falta de chave, erro HTTP, timeout ou resposta inválida bloqueiam a
+validação; não existe fallback do juiz para Groq. O modo demo permanece sem JEV.
+O roteador, os especialistas, o orquestrador e os guardrails mantêm seus provedores.
+Métricas de tokens/custo dos agentes LangChain não incluem as chamadas HTTP do JEV.
+
+No Render, configure `TYPESAFE_API_KEY` em **Environment**, junto às demais chaves e
+conexões usadas pela aplicação. `IAI_LLM_MODE` é opcional: seu padrão já é `live`.
+Use `demo` apenas para demonstração offline; não publique o arquivo `.env` local.
 
 API real não aceita identidade mock. JWT é validado por `GET /api/users/me`, sem
 decodificação não verificada e sem segredo de assinatura compartilhado. Tokens permanecem
@@ -129,7 +157,8 @@ Os testes comuns usam Mongo/dados/identidades simulados. O grafo também é exer
 agentes LangChain e um modelo roteirizado; isso não mede a qualidade de Gemini/Groq.
 Testes opcionais, somente com serviços explicitamente disponibilizados:
 
-- `RUN_LLM_TESTS=1` e chaves reais: FAQ pelos provedores, negócio/Mongo continuam mockados.
+- `RUN_LLM_TESTS=1` e chaves reais Gemini/Groq/TypeSafe exportadas no ambiente:
+  FAQ pelos provedores e avaliação JEV; negócio/Mongo continuam mockados.
 - `RUN_MONGO_TESTS=1` e `MONGO_TEST_CONNECTION`: persistência e decisão atômica em base
   temporária exclusiva `iai_test_<uuid>`; não usa `dbIAI`.
 - `RUN_SPRING_TESTS=1` e `SPRING_TEST_TOKEN`: leitura de identidade/catálogo real, sem escrita.
