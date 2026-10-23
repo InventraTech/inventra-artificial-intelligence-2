@@ -1,4 +1,4 @@
-import iai.app.memory as memory_module
+import iai.app.core.assistant.memory as memory_module
 
 
 class _ColSessoesFalsa:

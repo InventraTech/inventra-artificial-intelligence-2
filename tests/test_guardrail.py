@@ -1,14 +1,14 @@
 from langchain_core.runnables import RunnableLambda
 
-import iai.app.guardrail as guardrail_module
-from iai.app.guardrail import (
+import iai.app.core.assistant.guardrail as guardrail_module
+from iai.app.core.assistant.guardrail import (
     anonimizar_entrada,
     guardrail_escopo,
     guardrail_insulto,
     verificar,
 )
-from iai.app.prompts import GUARDRAIL_ENTRADA_SYSTEM_PROMPT
-from iai.app.schemas import ResultadoGuardrail
+from iai.app.core.assistant.prompts import GUARDRAIL_ENTRADA_SYSTEM_PROMPT
+from iai.app.core.schemas import ResultadoGuardrail
 
 
 class _LlmFalso:

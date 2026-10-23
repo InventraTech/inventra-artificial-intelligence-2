@@ -45,7 +45,7 @@ def test_real_mongo_atomic_claim_and_persistence():
     reason="API Spring e token de homologação não disponibilizados.",
 )
 def test_real_spring_identity_and_catalog_readonly():
-    from iai.app.config import API_URL
+    from iai.app.core.config import API_URL
 
     headers = {"Authorization": "Bearer " + os.environ["SPRING_TEST_TOKEN"]}
     with httpx.Client(
@@ -58,3 +58,16 @@ def test_real_spring_identity_and_catalog_readonly():
         products = client.get("/api/products", params={"page": 0, "size": 5})
         assert products.status_code == 200
         assert isinstance(products.json()["content"], list)
+@pytest.mark.skipif(
+    os.getenv("RUN_JEV_TESTS") != "1" or not os.getenv("TYPESAFE_API_KEY"),
+    reason="TypeSafe/JEV real não disponibilizado; contrato HTTP é simulado na suíte comum.",
+)
+def test_real_jev_typed_contract_readonly():
+    from iai.app.core.assistant.judge import Evaluation, evaluate
+
+    response = evaluate({
+        "user_request": "Consulte os lotes de arroz.",
+        "tool": {"name": "consultar_inventra", "schema": {"properties": {"resource": {"type": "string"}}}, "arguments": {"resource": "lotes"}},
+        "rules": ["This is a read-only lookup; no stock is changed."],
+    })
+    assert isinstance(response, Evaluation)

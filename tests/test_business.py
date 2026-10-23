@@ -2,9 +2,9 @@ import httpx
 import pytest
 from pydantic import SecretStr
 
-from iai.app.business import SpringGateway
-from iai.app.domain import Action, Query
-from iai.app.security import Identity, RequestContext, authenticate
+from iai.app.core.infra.security import Identity, RequestContext, authenticate
+from iai.app.core.inventra.business import SpringGateway
+from iai.app.core.inventra.domain import Action, Query
 
 
 def real_context(user="original"):
@@ -122,7 +122,7 @@ def test_writes_use_requester_identity_and_uncertain_timeout_is_not_retried(
 def test_real_identity_validated_by_spring_not_client_claims(monkeypatch):
     from fastapi.security import HTTPAuthorizationCredentials
 
-    from iai.app import security
+    from iai.app.core.infra import security
 
     monkeypatch.setattr(security, "AUTH_MODE", "spring")
     monkeypatch.setattr(

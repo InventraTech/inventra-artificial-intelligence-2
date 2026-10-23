@@ -4,18 +4,18 @@ import os
 import pytest
 from pydantic import SecretStr
 
-from iai.app.config import FAQ_PATH
-from iai.app.graph import executar_fluxo_assessor
-from iai.app.tools.faq import faq_retriever
+from iai.app.core.assistant.graph import executar_fluxo_assessor
+from iai.app.core.config import FAQ_PATH
+from iai.app.core.tools.faq import faq_retriever
 
 PRECISA_CHAVES_LLM = pytest.mark.skipif(
     os.getenv("RUN_LLM_TESTS") != "1"
     or any(
         os.getenv(key) in (None, "", "test-key")
-        for key in ("GEMINI_API_KEY", "GROQ_API_KEY", "TYPESAFE_API_KEY")
+        for key in ("GEMINI_API_KEY", "GROQ_API_KEY")
     ),
     reason=(
-        "Chama Gemini/Groq e o juiz JEV de verdade; o conftest.py fornece chaves fake para o "
+        "Chama o LLM de verdade (Gemini/Groq); o conftest.py força chaves fake para o "
         "restante da suite, então esse teste só roda com RUN_LLM_TESTS=1 e chaves reais "
         "exportadas no ambiente antes do pytest iniciar."
     ),
@@ -24,8 +24,12 @@ PRECISA_CHAVES_LLM = pytest.mark.skipif(
 
 @pytest.fixture
 def real_llm_context(monkeypatch):
-    from iai.app import graph
-    from iai.app.security import DEMO_IDENTITIES, RequestContext, current_context
+    from iai.app.core.assistant import graph
+    from iai.app.core.infra.security import (
+        DEMO_IDENTITIES,
+        RequestContext,
+        current_context,
+    )
 
     monkeypatch.setattr(graph, "LLM_MODE", "live")
     marker = current_context.set(

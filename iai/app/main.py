@@ -6,18 +6,16 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from pymongo.errors import PyMongoError
 
-from iai.app.approvals import expire_pending
-from iai.app.config import (
+from iai.app.core.config import (
     AUTH_MODE,
     BUSINESS_MODE,
     CORS_ORIGINS,
     LLM_MODE,
     STORAGE_MODE,
 )
-from iai.app.metrics import summarize
-from iai.app.routes import approvals, chat, queries
-from iai.app.security import Authenticated
-from iai.app.storage import get_db, initialize_storage
+from iai.app.core.infra.storage import get_db, initialize_storage
+from iai.app.core.inventra.approvals import expire_pending
+from iai.app.core.routes import approvals, chat, metrics, queries
 
 
 async def expiration_worker():
@@ -59,6 +57,7 @@ if CORS_ORIGINS:
 app.include_router(chat.router)
 app.include_router(approvals.router)
 app.include_router(queries.router)
+app.include_router(metrics.router)
 
 
 @app.middleware("http")
@@ -101,8 +100,3 @@ def health():
         if "mock" in {AUTH_MODE, BUSINESS_MODE, STORAGE_MODE} or LLM_MODE == "demo"
         else None,
     }
-
-
-@app.get("/metrics", tags=["métricas"])
-def metrics(ctx: Authenticated):
-    return summarize(ctx.identity)

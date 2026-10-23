@@ -2,9 +2,9 @@
 
 import pytest
 
-from iai.app.business import MockGateway
-from iai.app.domain import Query
-from iai.app.storage import get_db
+from iai.app.core.infra.storage import get_db
+from iai.app.core.inventra.business import MockGateway
+from iai.app.core.inventra.domain import Query
 from tests_helpers import approved, context_for
 
 
@@ -75,7 +75,7 @@ def test_restock_adjustment_and_insufficient_balance():
 def test_requisition_items_are_added_removed_and_cancelled_with_approval():
     req = approved("criar_requisicao", {"type": "PURCHASE", "origin": "cozinha"})
     rid = req["result"]["data"]["id"]
-    assert req["result"]["data"]["requester"]["id"] == "demo-estoquista"
+    assert req["result"]["data"]["requester"]["id"] == "demo-comprador"
     item = approved(
         "adicionar_item_requisicao",
         {"requisitionId": rid, "productId": 1, "quantity": 10},
@@ -162,3 +162,23 @@ def test_expired_batches_are_not_available_stock_and_small_pages_are_incomplete(
         .query(Query(resource="produtos", size=1), context_for())
         .incomplete
     )
+
+
+def test_capabilities_lista_tools_por_agente_e_cargos():
+    from fastapi.testclient import TestClient
+
+    from iai.app.main import app
+
+    corpo = TestClient(app).get(
+        "/queries/capabilities", headers={"Authorization": "Bearer demo-estoquista"}
+    ).json()
+    nomes = {agente: {t["name"] for t in tools} for agente, tools in corpo["agents"].items()}
+    assert "propor_registrar_saida" in nomes["estoquista"]
+    assert "propor_criar_requisicao" not in nomes["estoquista"]
+    assert "propor_criar_requisicao" in nomes["comprador"]
+    assert "propor_registrar_saida" not in nomes["comprador"]
+    assert nomes["estoquista"] | nomes["comprador"] <= nomes["supervisor"]
+    assert "propor_criar_produto" in nomes["supervisor"] - nomes["estoquista"] - nomes["comprador"]
+    roles = {o["operation"]: o["allowed_roles"] for o in corpo["operations"]}
+    assert roles["criar_produto"] == ["SUPERVISOR"]
+    assert roles["registrar_saida"] == ["ESTOQUISTA", "SUPERVISOR"]
