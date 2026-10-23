@@ -120,7 +120,7 @@ class ColetorMetricas(BaseCallbackHandler):
 
 def status_da_requisicao(agentes_chamados: list[str], falhou: bool) -> str:
     """erro = exceção; bloqueado = guardrail de entrada recusou (sistema funcionando, não é erro)."""
-    if falhou:
+    if falhou or "jev:indisponivel" in agentes_chamados:
         return "erro"
     for nome in agentes_chamados:
         if nome.startswith(PREFIXOS_GUARDRAIL_ENTRADA) and not nome.endswith(":aprovado"):
@@ -129,8 +129,8 @@ def status_da_requisicao(agentes_chamados: list[str], falhou: bool) -> str:
 
 
 def foi_resolvida(agentes_chamados: list[str]) -> bool:
-    """Resolvida = um especialista respondeu e o juiz aprovou (sem bloqueio, sem reprovação final)."""
-    return "juiz:aprovado" in agentes_chamados
+    """Execução autorizada concluída; reconhece marcador legado de métricas antigas."""
+    return "jev:concluido" in agentes_chamados or "juiz:aprovado" in agentes_chamados
 
 
 def registrar_requisicao(
@@ -161,10 +161,19 @@ def registrar_requisicao(
             "tokens_entrada":    sum(c["tokens_entrada"] for c in coletor.chamadas),
             "tokens_saida":      sum(c["tokens_saida"] for c in coletor.chamadas),
             "custo_usd":         sum(c["custo_usd"] for c in coletor.chamadas),
-            "erros_componentes": coletor.erros,
+            "erros_componentes": coletor.erros + [
+                "jev:" + call["error_type"] for call in (estado_final or {}).get("jev_calls", {}).values()
+                if call.get("error_type")
+            ],
             "resolvida":         status == "ok" and foi_resolvida(agentes),
             "agentes_chamados":  [str(a).split(":")[0] for a in agentes],
             "llm_mode":          LLM_MODE,
+            "jev": [{key: call[key] for key in (
+                "id", "agent", "tool", "attempt", "status", "decision", "checks",
+                "failed_checks", "duration_ms", "model", "usage", "error_type",
+                "created_at", "decided_at", "finished_at",
+            ) if key in call} for call in (estado_final or {}).get("jev_calls", {}).values()],
+            "jev_events": (estado_final or {}).get("jev_events", []),
             "error_type":        error_type,
         })
     except PyMongoError:

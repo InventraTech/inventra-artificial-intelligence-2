@@ -2,6 +2,7 @@ from langchain_core.runnables import RunnableConfig
 from langchain_core.tools import tool
 
 from iai.app.core.assistant.memory import recuperar_historico
+from iai.app.core.assistant.tool_gate import protect_tool
 from iai.app.core.infra.security import context
 
 
@@ -28,4 +29,4 @@ def buscar_historico(busca: str, config: RunnableConfig) -> str:
     return "\n\n".join(linhas)
 
 
-TOOLS_MEMORIA = [buscar_historico]
+TOOLS_MEMORIA = [protect_tool(buscar_historico)]

@@ -8,13 +8,13 @@ from langchain.agents import create_agent
 from langchain_core.language_models.fake_chat_models import FakeMessagesListChatModel
 from langchain_core.messages import AIMessage
 
-from iai.app.core.assistant import graph
+from iai.app.core.assistant import graph, judge
+from iai.app.core.assistant.tool_gate import JevToolGate
 from iai.app.core.infra.security import current_context
 from iai.app.core.infra.storage import get_db
 from iai.app.core.inventra.domain import Operation
-from iai.app.core.schemas import ResultadoJuiz
 from iai.app.core.tools.operational import PROPOSAL_TOOLS, consultar_inventra
-from tests_helpers import context_for
+from tests_helpers import context_for, jev_evaluation
 
 
 class ScriptedModel(FakeMessagesListChatModel):
@@ -72,6 +72,11 @@ def test_live_graph_executes_tools_and_proposes_without_executing(monkeypatch, p
     agent = create_agent(
         ScriptedModel(responses=responses),
         tools=[consultar_inventra, PROPOSAL_TOOLS[Operation.CONSUME]],
+        middleware=[
+            JevToolGate(
+                "estoquista", [consultar_inventra, PROPOSAL_TOOLS[Operation.CONSUME]]
+            )
+        ],
     )
     monkeypatch.setattr(graph, "LLM_MODE", "live")
     monkeypatch.setattr(graph, "estoquista_app", agent)
@@ -87,9 +92,11 @@ def test_live_graph_executes_tools_and_proposes_without_executing(monkeypatch, p
         ),
     )
     monkeypatch.setattr(
-        graph,
-        "avaliar_alucinacao",
-        lambda *a: ResultadoJuiz(confianca=0.95, motivo="Fatos simulados confirmados"),
+        judge,
+        "evaluate",
+        lambda state: jev_evaluation(
+            fields=state["tool"]["schema"].get("properties", {})
+        ),
     )
     monkeypatch.setattr(
         graph,
@@ -123,11 +130,6 @@ def test_formatter_cannot_change_confirmed_numbers(monkeypatch):
         graph,
         "orquestrador_app",
         SimpleNamespace(invoke=lambda *a, **kw: AIMessage(content="Temos 500 kg.")),
-    )
-    monkeypatch.setattr(
-        graph,
-        "avaliar_alucinacao",
-        lambda *a: ResultadoJuiz(confianca=0.1, motivo="Quantidade alterada"),
     )
     response = graph.no_orquestrador(
         {
@@ -183,3 +185,149 @@ def test_provider_exception_does_not_expose_credentials(monkeypatch):
         assert "private-secret" not in str(metric)
     finally:
         current_context.reset(marker)
+
+
+def test_partial_proposal_preserves_user_question_without_exposing_jev(monkeypatch):
+    proposal = PROPOSAL_TOOLS[Operation.CONSUME]
+    agent = create_agent(
+        ScriptedModel(
+            responses=[
+                AIMessage(
+                    content="",
+                    tool_calls=[
+                        {
+                            "id": "rice",
+                            "name": proposal.name,
+                            "args": {
+                                "batchId": 1,
+                                "quantity": "10",
+                                "justification": "Consumo informado",
+                            },
+                        }
+                    ],
+                ),
+                AIMessage(
+                    content="",
+                    tool_calls=[
+                        {
+                            "id": "meat",
+                            "name": proposal.name,
+                            "args": {
+                                "batchId": 2,
+                                "quantity": "40",
+                                "justification": "Quantidade não informada",
+                            },
+                        }
+                    ],
+                ),
+            ]
+        ),
+        tools=[proposal],
+        middleware=[JevToolGate("estoquista", [proposal])],
+    )
+
+    def evaluate(state):
+        fields = state["tool"]["schema"]["properties"]
+        if state["tool"]["arguments"]["batchId"] == 2:
+            return jev_evaluation(
+                failed={"missing_user_information": 0.99},
+                route="user_input",
+                missing="quantity",
+                fields=fields,
+            )
+        return jev_evaluation(fields=fields)
+
+    monkeypatch.setattr(judge, "evaluate", evaluate)
+    monkeypatch.setattr(graph, "LLM_MODE", "live")
+    monkeypatch.setattr(graph, "estoquista_app", agent)
+    monkeypatch.setattr(graph, "guardrail_insulto", lambda text: {"bloqueado": False})
+    monkeypatch.setattr(graph, "guardrail_escopo", lambda text: {"bloqueado": False})
+    monkeypatch.setattr(
+        graph,
+        "router_app",
+        SimpleNamespace(
+            invoke=lambda *a, **kw: {
+                "messages": [AIMessage(content="ROUTE=estoquista")]
+            }
+        ),
+    )
+    marker = current_context.set(replace(context_for(), turn_id="partial-question"))
+    try:
+        answer = graph.executar_fluxo_assessor(
+            "Usei 10 kg de arroz e carne.", "partial-question", "demo-estoquista"
+        )
+    finally:
+        current_context.reset(marker)
+    assert "AGUARDANDO_APROVACAO" in answer and "quantidade e a unidade" in answer
+    assert "JEV" not in answer and "RETRY_SPECIALIST" not in answer
+    assert get_db().approvals.count_documents({}) == 1
+    assert get_db().execution_mock.count_documents({}) == 0
+
+
+def test_live_missing_typesafe_key_blocks_tool(monkeypatch):
+    from pydantic import SecretStr
+
+    monkeypatch.setattr(judge, "TYPESAFE_API_KEY", SecretStr(""))
+    agent = create_agent(
+        ScriptedModel(
+            responses=[
+                AIMessage(
+                    content="",
+                    tool_calls=[
+                        {
+                            "id": "blocked",
+                            "name": "consultar_inventra",
+                            "args": {"resource": "lotes"},
+                        }
+                    ],
+                )
+            ]
+        ),
+        tools=[consultar_inventra],
+        middleware=[JevToolGate("estoquista", [consultar_inventra])],
+    )
+    monkeypatch.setattr(graph, "LLM_MODE", "live")
+    monkeypatch.setattr(graph, "estoquista_app", agent)
+    monkeypatch.setattr(graph, "guardrail_insulto", lambda text: {"bloqueado": False})
+    monkeypatch.setattr(graph, "guardrail_escopo", lambda text: {"bloqueado": False})
+    monkeypatch.setattr(
+        graph,
+        "router_app",
+        SimpleNamespace(
+            invoke=lambda *a, **kw: {
+                "messages": [AIMessage(content="ROUTE=estoquista")]
+            }
+        ),
+    )
+    marker = current_context.set(replace(context_for(), turn_id="missing-jev"))
+    try:
+        answer = graph.executar_fluxo_assessor(
+            "Mostre os lotes.", "missing-jev", "demo-estoquista"
+        )
+    finally:
+        current_context.reset(marker)
+    assert "indisponível" in answer and "JEV" not in answer
+    assert get_db().business_mock.count_documents({}) == 0
+    metric = get_db().metrics.find_one({})
+    assert metric["status"] == "erro" and metric["jev"][0]["status"] == "REJECT"
+    assert "arguments" not in str(metric["jev"])
+
+
+def test_live_direct_call_cannot_bypass_middleware(monkeypatch):
+    from fastapi import HTTPException
+
+    def unprotected_graph(*args, **kwargs):
+        consultar_inventra.invoke({"resource": "lotes"})
+
+    monkeypatch.setattr(graph, "LLM_MODE", "live")
+    monkeypatch.setattr(
+        graph, "fluxo_agentes", SimpleNamespace(invoke=unprotected_graph)
+    )
+    marker = current_context.set(replace(context_for(), turn_id="bypass"))
+    try:
+        with pytest.raises(HTTPException) as error:
+            graph.executar_fluxo_assessor("Lotes?", "bypass", "demo-estoquista")
+    finally:
+        current_context.reset(marker)
+    assert error.value.status_code == 502
+    assert get_db().business_mock.count_documents({}) == 0

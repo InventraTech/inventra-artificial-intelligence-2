@@ -3,6 +3,14 @@
 FastAPI + LangChain + LangGraph para conhecimento documental, consultas operacionais e
 propostas de alteração aprovadas por Supervisor. Esta branch não altera Spring nem frontend.
 
+Para compreender a arquitetura, as regras essenciais e os limites reais antes de trabalhar no código,
+consulte [Contexto da IAI para outras IAs](CONTEXTO_IAI_PARA_IAS.md).
+
+O chat **live** usa o [gate JEV pré-execução de tools](docs/JEV_GATE.md).
+Cada chamada é registrada e julgada antes de executar; isso não substitui a aprovação
+humana das alterações de negócio. Configure `TYPESAFE_API_KEY` para esse fluxo.
+O demo determinístico continua disponível sem JEV real.
+
 ## Executar localmente
 
 Use Python 3.12 em um ambiente virtual. No Windows, o comando `python` pode
@@ -204,6 +212,8 @@ Configure em ambiente ou `iai/.env`:
 | INVENTRA_HTTP_TIMEOUT | segundos; padrão 10 |
 | MONGO_CONNECTION | MongoDB; não inclua credenciais no Git |
 | GEMINI_API_KEY / GROQ_API_KEY | provedores para agentes live |
+| TYPESAFE_API_KEY | TypeSafe/JEV para autorizar tools dos agentes live; falha bloqueia execução |
+| JEV_MODEL / JEV_APPROVAL_THRESHOLD / JEV_TIMEOUT | versão `jev-1.13.0`, limiar 0.70, timeout 10 s |
 | CORS_ORIGINS | origens exatas do frontend, separadas por vírgula (padrão `http://localhost:3000,http://localhost:5173`) |
 | METRICAS_REQ_USUARIO_SEMANA / METRICAS_VALOR_RESOLUCAO_USD | premissas do `/metrics` (padrão 10 e 1.50) |
 
@@ -238,6 +248,7 @@ Testes opcionais, somente com serviços explicitamente disponibilizados:
 - `RUN_MONGO_TESTS=1` e `MONGO_TEST_CONNECTION`: persistência e decisão atômica em base
   temporária exclusiva `iai_test_<uuid>`; não usa `dbIAI`.
 - `RUN_SPRING_TESTS=1` e `SPRING_TEST_TOKEN`: leitura de identidade/catálogo real, sem escrita.
+- `RUN_JEV_TESTS=1` e `TYPESAFE_API_KEY`: contrato real de decisões TypeSafe, sem executar tools de negócio.
 
 
 ## Observabilidade e métricas SRE
@@ -279,8 +290,12 @@ Definições:
 - **Índice de erros** = requisições que terminaram em exceção ÷ requisições. Bloqueio do guardrail
   de entrada é o sistema funcionando e **não** conta (aparece em `erros.bloqueios`).
   `indice_erros_componentes` também conta erros de LLM/ferramenta que o fallback recuperou.
-- **Resolvida** = um especialista respondeu e o juiz aprovou (`juiz:aprovado`). Bloqueio, resposta
-  direta do roteador e reprovação final do juiz não contam.
+- **Resolvida** = especialista terminou com execução autorizada de tool, sem parada do gate
+  nem falha de execução (`jev:concluido`). Não comprova fidelidade de toda a redação final.
+  O marcador `juiz:aprovado` continua reconhecido somente para compatibilidade com métricas legadas.
+- **JEV:** decisões e eventos técnicos ficam nos documentos da coleção de métricas, sem
+  argumentos ou conteúdo da conversa; não alteram o contrato público de `/metrics`.
+  Seu custo ainda não está incluído na estimativa financeira LLM; o uso retornado é registrado.
 - **Projeção** = usuários × `requisicoes_por_usuario_semana` × semanas do período (1 para semana,
   52/12 para mês) × custo médio por requisição **observado**. Sem tráfego registrado, vem zerada.
 - **Premissas** (`config.py`): preços por modelo (conferir nas tabelas oficiais),

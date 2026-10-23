@@ -42,3 +42,30 @@ def approved(operation, parameters):
         DecisionInput(decision="approve", proposal_hash=p["proposal_hash"]),
         context_for("demo-supervisor"),
     )
+
+
+def jev_evaluation(*, failed=None, route="none", missing="not_identified", fields=()):
+    """Resposta TypeSafe roteirizada. Não avalia a qualidade do modelo externo."""
+    from iai.app.core.assistant import judge
+
+    answers = {
+        key: {"type": "noul", "noul": 0.99 if key in judge.POSITIVE else 0.01}
+        for key in (*judge.POSITIVE, *judge.RISKS)
+    }
+    for key, probability in (failed or {}).items():
+        answers[key]["noul"] = probability
+    for key, choice, options in (
+        ("repair_route", route, judge.ROUTES),
+        ("missing_field", missing, {**dict.fromkeys(fields), "not_identified": None}),
+    ):
+        answers[key] = {
+            "type": "choice",
+            "choice": choice,
+            "confidence": 1.0,
+            "probabilities": {option: float(option == choice) for option in options},
+        }
+    return judge.Evaluation(
+        model="jev-1.13.0",
+        answers=answers,
+        usage={"input_tokens": 10, "output_tokens": 2},
+    )

@@ -1,11 +1,35 @@
 import asyncio
 import json
+import os
+import subprocess
+import sys
+from pathlib import Path
 
 import pytest
 
 from iai.app.core.infra.storage import get_db
 from iai.app.extras.mcp_server import contexto_do_ambiente, criar_servidor
 from tests_helpers import context_for
+
+
+def test_script_inicia_fora_do_diretorio_do_projeto(tmp_path):
+    script = Path(__file__).resolve().parents[1] / "iai/app/extras/mcp_server.py"
+    ambiente = os.environ.copy()
+    ambiente.pop("PYTHONPATH", None)
+    ambiente.pop("IAI_MCP_TOKEN", None)
+    resultado = subprocess.run(
+        [sys.executable, str(script)],
+        check=False,
+        cwd=tmp_path,
+        env=ambiente,
+        capture_output=True,
+        text=True,
+        timeout=45,
+    )
+    assert resultado.returncode != 0
+    assert "[assessor-inventra] Defina IAI_MCP_TOKEN" in resultado.stderr
+    assert "ModuleNotFoundError" not in resultado.stderr
+    assert resultado.stdout == ""
 
 
 def nomes_das_tools(token):
