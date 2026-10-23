@@ -1,3 +1,4 @@
+import re
 from time import perf_counter
 from typing import cast
 
@@ -14,20 +15,11 @@ from iai.app.core.assistant.guardrail import (
     guardrail_insulto,
     guardrail_saida,
 )
-from iai.app.core.assistant.judge import (
-    FATOS_VAZIOS,
-    LIMIAR_CONFIANCA_JUIZ,
-    MAX_TENTATIVAS_JUIZ,
-    avaliar_alucinacao,
-    extrair_pergunta_fatos_e_resposta,
-    ultima_mensagem_ai,
-)
 from iai.app.core.assistant.llms import llm_especialista, llm_rapido
 from iai.app.core.assistant.memory import (
     iniciar_sessao,
     mensagens_ativas,
     salvar_mensagem,
-    salvar_mensagem_juiz,
 )
 from iai.app.core.assistant.prompts import (
     COMPRADOR_SYSTEM_PROMPT,
@@ -39,6 +31,7 @@ from iai.app.core.assistant.prompts import (
     com_contexto_temporal,
     contexto_temporal,
 )
+from iai.app.core.assistant.tool_gate import JevToolGate, live_tool_scope
 from iai.app.core.config import BUSINESS_MODE, LLM_MODE
 from iai.app.core.infra.metrics import ColetorMetricas, registrar_requisicao
 from iai.app.core.infra.security import context
@@ -77,7 +70,10 @@ def _prompt_com_data(prompt_base: str):
 router_app = create_agent(
     model=llm_rapido,
     tools=TOOLS_MEMORIA,
-    middleware=[_prompt_com_data(ROTEADOR_SYSTEM_PROMPT)],
+    middleware=[
+        JevToolGate("roteador", TOOLS_MEMORIA),
+        _prompt_com_data(ROTEADOR_SYSTEM_PROMPT),
+    ],
 )
 
 orquestrador_prompt = ChatPromptTemplate.from_messages(
@@ -88,25 +84,37 @@ orquestrador_app = orquestrador_prompt | llm_rapido
 estoquista_app = create_agent(  # type: ignore[call-overload]
     model=llm_especialista,
     tools=STOCK_TOOLS + TOOLS_MEMORIA + [faq_retriever],
-    middleware=[_prompt_com_data(ESTOQUISTA_SYSTEM_PROMPT)],
+    middleware=[
+        JevToolGate("estoquista", STOCK_TOOLS + TOOLS_MEMORIA + [faq_retriever]),
+        _prompt_com_data(ESTOQUISTA_SYSTEM_PROMPT),
+    ],
 )
 
 comprador_app = create_agent(  # type: ignore[call-overload]
     model=llm_especialista,
     tools=BUY_TOOLS + TOOLS_MEMORIA + [faq_retriever],
-    middleware=[_prompt_com_data(COMPRADOR_SYSTEM_PROMPT)],
+    middleware=[
+        JevToolGate("comprador", BUY_TOOLS + TOOLS_MEMORIA + [faq_retriever]),
+        _prompt_com_data(COMPRADOR_SYSTEM_PROMPT),
+    ],
 )
 
 supervisor_app = create_agent(  # type: ignore[call-overload]
     model=llm_especialista,
     tools=SUPERVISOR_TOOLS + TOOLS_MEMORIA + [faq_retriever],
-    middleware=[_prompt_com_data(SUPERVISOR_SYSTEM_PROMPT)],
+    middleware=[
+        JevToolGate("supervisor", SUPERVISOR_TOOLS + TOOLS_MEMORIA + [faq_retriever]),
+        _prompt_com_data(SUPERVISOR_SYSTEM_PROMPT),
+    ],
 )
 
 faq_app = create_agent(
     model=llm_rapido,
     tools=[faq_retriever],
-    middleware=[_prompt_com_data(FAQ_SYSTEM_PROMPT)],
+    middleware=[
+        JevToolGate("faq", [faq_retriever]),
+        _prompt_com_data(FAQ_SYSTEM_PROMPT),
+    ],
 )
 
 
@@ -169,9 +177,38 @@ def no_guardrail_saida(estado: Estado) -> dict:
     }
 
 
+def gate_updates(state, response, agent):
+    calls = response.get("jev_calls", {})
+    halt = response.get("jev_halt")
+    markers = []
+    if halt:
+        markers = [
+            "jev:indisponivel"
+            if any(c.get("error_type") for c in calls.values())
+            else "jev:rejeitado"
+        ]
+    if (
+        agent != "roteador"
+        and calls
+        and not halt
+        and any(c["status"] == "EXECUTED" for c in calls.values())
+        and not any(c["status"] == "FAILED" for c in calls.values())
+    ):
+        markers = ["jev:concluido"]
+    return {
+        "jev_calls": {**state.get("jev_calls", {}), **calls},
+        "jev_events": response.get("jev_events", []),
+        "jev_halt": halt,
+        "agentes_chamados": markers,
+    }
+
+
 def no_roteador(estado: Estado, config: RunnableConfig) -> dict:
     saida = router_app.invoke({"messages": list(estado["messages"])}, config=config)
 
+    updates = gate_updates(estado, saida, "roteador")
+    if updates["jev_halt"]:
+        return {**updates, "rota": "fim", "messages": saida["messages"]}
     texto = extrair_texto(saida["messages"][-1])
 
     if "ROUTE=" not in texto:
@@ -180,31 +217,33 @@ def no_roteador(estado: Estado, config: RunnableConfig) -> dict:
         greeting = normalizar_texto(extrair_texto(estado["messages"][-1])).strip(
             " .!?\n"
         )
-        _, facts, _ = extrair_pergunta_fatos_e_resposta(saida["messages"])
-        if greeting not in {
-            "oi",
-            "ola",
-            "bom dia",
-            "boa tarde",
-            "boa noite",
-            "obrigado",
-            "obrigada",
-            "tudo bem",
-        } and (
-            not facts
-            or avaliar_alucinacao(
-                extrair_texto(estado["messages"][-1]), facts, texto
-            ).confianca
-            < LIMIAR_CONFIANCA_JUIZ
+        facts = [
+            m for m in saida["messages"] if m.type == "tool" and m.status != "error"
+        ]
+        if (
+            greeting
+            not in {
+                "oi",
+                "ola",
+                "bom dia",
+                "boa tarde",
+                "boa noite",
+                "obrigado",
+                "obrigada",
+                "tudo bem",
+            }
+            and not facts
         ):
             # Falha de protocolo não vira resposta operacional sem evidência.
             return {
+                **updates,
                 "agentes_chamados": ["roteador:protocolo_invalido"],
                 "rota": "supervisor",
             }
         if not facts:
             texto = "Olá! Posso ajudar com consultas do INVENTRA e propostas para aprovação."
         return {
+            **updates,
             "agentes_chamados": ["roteador"],
             "rota": "fim",
             "messages": [{"role": "assistant", "content": texto}],
@@ -220,12 +259,15 @@ def no_roteador(estado: Estado, config: RunnableConfig) -> dict:
         rota = "supervisor"
 
     return {
+        **updates,
         "agentes_chamados": ["roteador"],
         "rota": rota,
     }
 
 
 def no_orquestrador(estado: Estado) -> dict:
+    if estado.get("jev_halt"):
+        return {"messages": [{"role": "assistant", "content": estado["jev_halt"]}]}
     ultima_especialista = ""
     for mensagem in reversed(estado["messages"]):
         if mensagem.type == "ai" and mensagem.content:
@@ -236,90 +278,16 @@ def no_orquestrador(estado: Estado) -> dict:
 
     saida = orquestrador_app.invoke({"mensagens": texto_para_orquestrar})
 
-    pergunta, fatos, _ = extrair_pergunta_fatos_e_resposta(estado["messages"])
     final_text = extrair_texto(saida)
-    if (
-        avaliar_alucinacao(pergunta, fatos or FATOS_VAZIOS, final_text).confianca
-        < LIMIAR_CONFIANCA_JUIZ
-    ):
+    # Conserva números literalmente; não é um segundo juiz probabilístico.
+    numbers = lambda text: set(re.findall(r"\d+(?:[.,]\d+)*", text))
+    if not numbers(final_text).issubset(numbers(ultima_especialista)):
         final_text = ultima_especialista
 
     return {
         "agentes_chamados": [estado["rota"], "orquestrador"],
         "messages": [{"role": "assistant", "content": final_text}],
     }
-
-
-def no_juiz(estado: Estado, config: RunnableConfig) -> dict:
-    pergunta, fatos, resposta = extrair_pergunta_fatos_e_resposta(estado["messages"])
-
-    if not resposta:
-        return {
-            "agentes_chamados": ["juiz:sem_resposta_para_validar"],
-            "repetir_especialista": False,
-        }
-
-    resultado = avaliar_alucinacao(pergunta, fatos or FATOS_VAZIOS, resposta)
-    aprovado = resultado.confianca >= LIMIAR_CONFIANCA_JUIZ
-
-    if aprovado:
-        return {"agentes_chamados": ["juiz:aprovado"], "repetir_especialista": False}
-
-    configuravel = (config or {}).get("configurable", {})
-    salvar_mensagem_juiz(
-        session_id=configuravel.get("thread_id", ""),
-        conteudo=f'Resposta avaliada: "{resposta}" — Motivo: {resultado.motivo}',
-        confianca=resultado.confianca,
-        user_id=configuravel.get("user_id", "user_test"),
-        kitchen_id=configuravel.get("kitchen_id", 1),
-    )
-
-    tentativas = estado.get("tentativas_juiz", 0) + 1
-
-    if tentativas >= MAX_TENTATIVAS_JUIZ:
-        mensagens: list = [
-            {
-                "role": "assistant",
-                "content": (
-                    "Não consegui confirmar essa informação com segurança nos dados "
-                    "do sistema. Pode reformular a pergunta ou falar com o suporte?"
-                ),
-            }
-        ]
-
-        mensagem_anterior = ultima_mensagem_ai(estado["messages"])
-        if mensagem_anterior and mensagem_anterior.id:
-            mensagens.insert(0, RemoveMessage(id=mensagem_anterior.id))
-
-        return {
-            "agentes_chamados": [f"juiz:reprovado_final:{resultado.motivo}"],
-            "repetir_especialista": False,
-            "tentativas_juiz": tentativas,
-            "messages": mensagens,
-        }
-
-    return {
-        "agentes_chamados": [f"juiz:reprovado:{resultado.motivo}"],
-        "repetir_especialista": True,
-        "tentativas_juiz": tentativas,
-        "messages": [
-            HumanMessage(
-                content=(
-                    f"Sua última resposta não pôde ser confirmada pelos dados "
-                    f"retornados pelas ferramentas (motivo: {resultado.motivo}). Responda "
-                    "novamente usando ESTRITAMENTE os dados já obtidos; se necessário, "
-                    "chame as ferramentas novamente."
-                ),
-                additional_kwargs={"juiz_feedback": True},
-            )
-        ],
-    }
-
-
-def decidir_pos_juiz(estado: Estado) -> str:
-    if estado.get("repetir_especialista"):
-        return estado["rota"]
-    return "guardrail_saida" if estado["rota"] == "faq" else "orquestrador"
 
 
 def decidir_especialista(estado: Estado) -> str:
@@ -354,7 +322,10 @@ def especialista_node(nome):
             "faq": faq_app,
         }[nome]
         resposta = agente.invoke({"messages": list(estado["messages"])}, config=config)
-        return {"messages": resposta["messages"]}
+        return {
+            **gate_updates(estado, resposta, nome),
+            "messages": resposta["messages"],
+        }
 
     return invoke
 
@@ -363,7 +334,6 @@ grafo.add_node("estoquista", especialista_node("estoquista"))
 grafo.add_node("comprador", especialista_node("comprador"))
 grafo.add_node("supervisor", especialista_node("supervisor"))
 grafo.add_node("faq", especialista_node("faq"))
-grafo.add_node("juiz", no_juiz)  # type: ignore[call-overload,arg-type]
 grafo.add_node("orquestrador", no_orquestrador)  # type: ignore[call-overload,arg-type]
 grafo.add_node("guardrail_saida", no_guardrail_saida)  # type: ignore[call-overload,arg-type]
 
@@ -399,23 +369,10 @@ grafo.add_conditional_edges(
     },
 )
 
-grafo.add_edge("estoquista", "juiz")
-grafo.add_edge("comprador", "juiz")
-grafo.add_edge("supervisor", "juiz")
-grafo.add_edge("faq", "juiz")
-
-grafo.add_conditional_edges(
-    "juiz",
-    decidir_pos_juiz,
-    {
-        "estoquista": "estoquista",
-        "comprador": "comprador",
-        "supervisor": "supervisor",
-        "faq": "faq",
-        "orquestrador": "orquestrador",
-        "guardrail_saida": "guardrail_saida",
-    },
-)
+grafo.add_edge("estoquista", "orquestrador")
+grafo.add_edge("comprador", "orquestrador")
+grafo.add_edge("supervisor", "orquestrador")
+grafo.add_edge("faq", "guardrail_saida")
 
 grafo.add_edge("orquestrador", "guardrail_saida")
 grafo.add_edge("guardrail_saida", END)
@@ -450,8 +407,9 @@ def executar_fluxo_assessor(
             "agentes_chamados": [],
             "rota": "",
             "mapa_pii": {},
-            "tentativas_juiz": 0,
-            "repetir_especialista": False,
+            "jev_calls": {},
+            "jev_events": [],
+            "jev_halt": None,
         },
     )
     coletor = ColetorMetricas()
@@ -475,35 +433,40 @@ def executar_fluxo_assessor(
                     503,
                     "Provedores LLM não configurados. Configure chaves ou habilite explicitamente o modo demo.",
                 )
-            output = fluxo_agentes.invoke(
-                estado_inicial,
-                config={
-                    "configurable": {
-                        "thread_id": session_id,
-                        "user_id": user_id,
-                        "kitchen_id": k,
+            with live_tool_scope():
+                output = fluxo_agentes.invoke(
+                    estado_inicial,
+                    config={
+                        "configurable": {
+                            "thread_id": session_id,
+                            "user_id": user_id,
+                            "kitchen_id": k,
+                        },
+                        "recursion_limit": 80,
+                        "max_concurrency": 1,
+                        "callbacks": [coletor],
+                        "run_name": "iai_chat",
+                        "tags": ["iai"],
+                        "metadata": {"session_id": session_id, "user_id": user_id},
                     },
-                    "recursion_limit": 80,
-                    "callbacks": [coletor],
-                    "run_name": "iai_chat",
-                    "tags": ["iai"],
-                    "metadata": {"session_id": session_id, "user_id": user_id},
-                },
-            )
+                )
+
         response = extrair_texto(output["messages"][-1])
         proposals = []
         tool_failures = []
         for message in reversed(output["messages"]):
-            if message.type == "human" and not message.additional_kwargs.get(
-                "juiz_feedback"
-            ):
+            if message.type == "human":
                 break
             if message.type == "tool":
                 try:
                     data = json.loads(extrair_texto(message))
                     if isinstance(data, dict) and data.get("proposal"):
                         proposals.append(data["proposal"])
-                    elif isinstance(data, dict) and data.get("ok") is False:
+                    elif (
+                        isinstance(data, dict)
+                        and data.get("ok") is False
+                        and data.get("code") not in {"JEV_REJECTED", "TOOL_FAILED"}
+                    ):
                         tool_failures.append(
                             f"{data.get('code', 'ERRO')}: {data.get('message', 'Etapa não confirmada.')}"
                         )
@@ -519,6 +482,8 @@ def executar_fluxo_assessor(
                     reversed(tool_failures)
                 )
             response += "\nSomente as propostas listadas foram registradas; outros itens ou dados ainda não confirmados não foram propostos."
+            if output.get("jev_halt"):
+                response += "\n" + output["jev_halt"]
         if BUSINESS_MODE == "mock":
             response = "[DADOS OPERACIONAIS MOCK — demonstração]\n" + response
         if LLM_MODE == "demo":

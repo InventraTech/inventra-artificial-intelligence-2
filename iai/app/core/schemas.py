@@ -113,16 +113,12 @@ class Estado(MessagesState):
     agentes_chamados: Annotated[list[str], operator.add]
     rota: str
     mapa_pii: dict
-    tentativas_juiz: int
-    repetir_especialista: bool
+    jev_calls: dict
+    jev_events: Annotated[list[dict], operator.add]
+    jev_halt: str | None
 
 
 class ResultadoGuardrail(BaseModel):
     bloqueado: bool
     motivo: str
     mensagem: str
-
-
-class ResultadoJuiz(BaseModel):
-    confianca: float = Field(ge=0, le=1)
-    motivo: str

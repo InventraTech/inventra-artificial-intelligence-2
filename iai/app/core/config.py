@@ -12,9 +12,17 @@ FRONTEND_DIR = BASE_DIR / "frontend"
 FAQ_PATH = DATA_DIR / "faq_inventra.jsonl"
 
 load_dotenv(BASE_DIR / ".env")
+# Configuração local legada; variáveis do processo e iai/.env têm prioridade.
+load_dotenv(BASE_DIR / "app" / ".env")
 
 GEMINI_API_KEY = SecretStr(os.getenv("GEMINI_API_KEY", ""))
 GROQ_API_KEY = SecretStr(os.getenv("GROQ_API_KEY", ""))
+TYPESAFE_API_KEY = SecretStr(os.getenv("TYPESAFE_API_KEY", ""))
+JEV_MODEL = os.getenv("JEV_MODEL", "jev-1.13.0")
+JEV_APPROVAL_THRESHOLD = float(os.getenv("JEV_APPROVAL_THRESHOLD", "0.70"))
+JEV_TIMEOUT = float(os.getenv("JEV_TIMEOUT", "10"))
+if not 0.5 < JEV_APPROVAL_THRESHOLD <= 1 or not 0 < JEV_TIMEOUT <= 60:
+    raise ValueError("Configuração JEV inválida: limiar > 0.5 e <= 1; timeout > 0 e <= 60.")
 MONGO_CONNECTION = SecretStr(os.getenv("MONGO_CONNECTION", "mongodb://localhost:27017"))
 
 PRECOS_MODELOS_USD_POR_MILHAO: dict[str, tuple[float, float]] = {
@@ -41,6 +49,7 @@ CORS_ORIGINS = [
 OBRIGATORIAS = {
     "GEMINI_API_KEY": GEMINI_API_KEY,
     "GROQ_API_KEY": GROQ_API_KEY,
+    "TYPESAFE_API_KEY": TYPESAFE_API_KEY,
     "MONGO_CONNECTION": MONGO_CONNECTION,
 }
 

@@ -55,6 +55,8 @@ def test_status_da_requisicao():
 
 
 def test_foi_resolvida():
+    assert m.foi_resolvida(["estoquista", "jev:concluido"])
+    assert m.status_da_requisicao(["jev:indisponivel"], falhou=False) == "erro"
     assert m.foi_resolvida(["roteador", "juiz:aprovado"])
     assert not m.foi_resolvida(["juiz:reprovado_final:x"])
 

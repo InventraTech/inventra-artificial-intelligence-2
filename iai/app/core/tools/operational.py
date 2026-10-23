@@ -8,6 +8,7 @@ from langchain_core.tools import StructuredTool, tool
 from pydantic import Field, ValidationError, create_model
 from pymongo.errors import PyMongoError
 
+from iai.app.core.assistant.tool_gate import protect_tool
 from iai.app.core.config import STORAGE_MODE
 from iai.app.core.infra.security import context
 from iai.app.core.inventra.approvals import (
@@ -167,6 +168,7 @@ for operational_tool in [
     consultar_solicitacoes_iai,
     *PROPOSAL_TOOLS.values(),
 ]:
+    protect_tool(operational_tool)
     operational_tool.handle_validation_error = "Parâmetros incompletos ou inválidos. Consulte os IDs e peça os campos necessários; nenhuma operação foi executada."
 STOCK_TOOLS = [consultar_inventra, consultar_solicitacoes_iai] + [
     PROPOSAL_TOOLS[o] for o in Operation if o in STOCK_OPERATIONS

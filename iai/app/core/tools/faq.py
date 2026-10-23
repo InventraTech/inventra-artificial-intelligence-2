@@ -2,6 +2,7 @@ import json
 
 from langchain_core.tools import tool
 
+from iai.app.core.assistant.tool_gate import protect_tool
 from iai.app.core.config import FAQ_PATH
 from iai.app.core.infra.retrieval import rank
 
@@ -21,3 +22,6 @@ def faq_retriever(question: str) -> str:
         )
     except (OSError, ValueError, KeyError):
         return "Base documental indisponível ou inválida. Não invente a resposta."
+
+
+protect_tool(faq_retriever)
