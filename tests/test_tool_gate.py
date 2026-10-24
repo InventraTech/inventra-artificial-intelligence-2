@@ -6,7 +6,7 @@ from langchain_core.language_models.fake_chat_models import FakeMessagesListChat
 from langchain_core.messages import AIMessage, HumanMessage
 from langchain_core.tools import tool
 
-from iai.app.core.assistant import judge
+from iai.app.core.assistant import judge, tool_gate
 from iai.app.core.assistant.tool_gate import JevToolGate, live_tool_scope, protect_tool
 from iai.app.core.infra.security import current_context
 from iai.app.core.infra.storage import get_db
@@ -32,6 +32,12 @@ def call(name="lookup", args=None, identifier="call-1"):
 
 def turn(*calls):
     return AIMessage(content="", tool_calls=list(calls))
+
+
+@pytest.fixture(autouse=True)
+def escopo_todas(monkeypatch):
+    """Os testes abaixo exercitam o juiz em qualquer tool; o escopo padrão tem testes próprios."""
+    monkeypatch.setattr(tool_gate, "JEV_ESCOPO", "todas")
 
 
 @pytest.fixture
@@ -236,7 +242,7 @@ def test_unknown_tool_is_rejected_before_evaluation(monkeypatch, authenticated, 
     ]
 
 
-def test_approved_proposal_still_requires_human_approval(monkeypatch, authenticated):
+def test_judged_action_request_is_validated_but_never_executed(monkeypatch, authenticated):
     approve(monkeypatch)
     proposal = PROPOSAL_TOOLS[Operation.CONSUME]
     result = invoke(
@@ -259,7 +265,6 @@ def test_approved_proposal_still_requires_human_approval(monkeypatch, authentica
         "Usei 10 kg de arroz",
     )
     assert next(iter(result["jev_calls"].values()))["status"] == "EXECUTED"
-    assert get_db().approvals.find_one({})["status"] == "AGUARDANDO_APROVACAO"
     assert get_db().execution_mock.count_documents({}) == 0
 
 
@@ -287,7 +292,7 @@ def test_role_veto_does_not_call_jev(monkeypatch, authenticated):
         )
     finally:
         current_context.reset(marker)
-    assert seen == [] and get_db().approvals.count_documents({}) == 0
+    assert seen == [] and get_db().execution_mock.count_documents({}) == 0
 
 
 @pytest.mark.parametrize(
@@ -403,7 +408,6 @@ def test_all_live_agents_have_the_gate():
         graph.estoquista_app,
         graph.comprador_app,
         graph.supervisor_app,
-        graph.faq_app,
     ):
         assert any(
             "JevToolGate.after_model" in name for name in agent.get_graph().nodes
@@ -444,3 +448,144 @@ def test_tool_reported_error_is_not_a_successful_execution(monkeypatch, authenti
     result = invoke(agent)
     record = next(iter(result["jev_calls"].values()))
     assert record["decision"] == "APPROVE" and record["status"] == "FAILED"
+
+
+# ---- escopo padrão: o JEV julga o que escreve (propor_*); leitura segue só o gate determinístico ----
+
+
+def test_leitura_nao_consulta_o_juiz_no_escopo_escrita(
+    monkeypatch, authenticated, lookup
+):
+    monkeypatch.setattr(tool_gate, "JEV_ESCOPO", "escrita")
+    lookup, executions = lookup
+
+    def nunca(state):
+        raise AssertionError("leitura não deve chamar o JEV")
+
+    monkeypatch.setattr(judge, "evaluate", nunca)
+    result = invoke(make_agent([turn(call()), AIMessage(content="ok")], [lookup]))
+
+    registro = next(iter(result["jev_calls"].values()))
+    assert executions == ["arroz"] and registro["status"] == "EXECUTED"
+    assert registro["jev_dispensado"] == "leitura"
+
+
+def test_leitura_funciona_mesmo_sem_chave_do_jev(monkeypatch, authenticated, lookup):
+    from pydantic import SecretStr
+
+    monkeypatch.setattr(tool_gate, "JEV_ESCOPO", "escrita")
+    monkeypatch.setattr(judge, "TYPESAFE_API_KEY", SecretStr(""))
+    lookup, executions = lookup
+
+    invoke(make_agent([turn(call()), AIMessage(content="ok")], [lookup]))
+
+    assert executions == ["arroz"]
+
+
+def test_leitura_com_argumento_invalido_continua_barrada(
+    monkeypatch, authenticated, lookup
+):
+    monkeypatch.setattr(tool_gate, "JEV_ESCOPO", "escrita")
+    lookup, executions = lookup
+
+    result = invoke(
+        make_agent([turn(call(args={}, identifier=str(i))) for i in range(3)], [lookup])
+    )
+
+    assert executions == []
+    assert all(
+        c["failed_checks"] == ["SCHEMA_INVALID"] for c in result["jev_calls"].values()
+    )
+
+
+def test_proposta_sempre_passa_pelo_juiz_no_escopo_escrita(monkeypatch, authenticated):
+    monkeypatch.setattr(tool_gate, "JEV_ESCOPO", "escrita")
+    seen = approve(monkeypatch)
+    proposal = PROPOSAL_TOOLS[Operation.CONSUME]
+
+    invoke(
+        make_agent(
+            [
+                turn(
+                    call(
+                        proposal.name,
+                        {"batchId": 1, "quantity": "10", "justification": "Consumo"},
+                    )
+                ),
+                AIMessage(content="aguarda"),
+            ],
+            [proposal],
+        ),
+        "Usei 10 kg de arroz",
+    )
+
+    assert len(seen) == 1
+
+
+def test_proposta_sem_chave_do_jev_continua_bloqueada(monkeypatch, authenticated):
+    from pydantic import SecretStr
+
+    monkeypatch.setattr(tool_gate, "JEV_ESCOPO", "escrita")
+    monkeypatch.setattr(judge, "TYPESAFE_API_KEY", SecretStr(""))
+    proposal = PROPOSAL_TOOLS[Operation.CONSUME]
+
+    invoke(
+        make_agent(
+            [
+                turn(
+                    call(
+                        proposal.name,
+                        {"batchId": 1, "quantity": "10", "justification": "Consumo"},
+                    )
+                )
+            ],
+            [proposal],
+        ),
+        "Usei 10 kg de arroz",
+    )
+
+    assert get_db().execution_mock.count_documents({}) == 0
+
+
+def test_recusa_do_juiz_aparece_no_log_com_o_motivo(
+    monkeypatch, authenticated, lookup, caplog
+):
+    import logging
+
+    lookup, _ = lookup
+    monkeypatch.setattr(
+        judge,
+        "evaluate",
+        lambda state: jev_evaluation(
+            failed={"tool_necessity": 0.1},
+            route="reject",
+            fields=state["tool"]["schema"].get("properties", {}),
+        ),
+    )
+
+    with caplog.at_level(logging.INFO, logger=tool_gate.logger.name):
+        invoke(make_agent([turn(call())], [lookup]))
+
+    assert "jev_rejected" in caplog.text and "tool_necessity" in caplog.text
+    assert "arroz" not in caplog.text
+
+
+def test_recusa_explica_o_motivo_em_vez_de_mensagem_generica(
+    monkeypatch, authenticated, lookup
+):
+    lookup, executions = lookup
+    monkeypatch.setattr(
+        judge,
+        "evaluate",
+        lambda state: jev_evaluation(
+            failed={"arguments_grounded": 0.1},
+            route="reject",
+            fields=state["tool"]["schema"].get("properties", {}),
+        ),
+    )
+
+    result = invoke(make_agent([turn(call())], [lookup]))
+
+    assert executions == []
+    assert "nome completo" in result["messages"][-1].content
+    assert "Essa etapa não foi realizada" in result["messages"][-1].content

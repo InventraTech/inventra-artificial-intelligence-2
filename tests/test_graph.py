@@ -133,7 +133,7 @@ def test_no_roteador_sem_route_responde_direto(monkeypatch):
     estado = {"messages": [HumanMessage(content="bom dia")]}
     resultado = g.no_roteador(estado, config={})
     assert resultado["rota"] == "fim"
-    assert "propostas para aprovação" in resultado["messages"][0]["content"]
+    assert "dúvidas sobre o sistema" in resultado["messages"][0]["content"]
 
 
 def test_no_orquestrador(monkeypatch):

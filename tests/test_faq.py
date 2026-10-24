@@ -60,7 +60,7 @@ def test_agente_responde_pergunta_identica_ao_jsonl(real_llm_context):
         "demo-estoquista",
     )
 
-    assert "aprova" in resposta.lower()
+    assert "confirmação humana" in resposta.lower() or "não" in resposta.lower()
     assert "unidade" in resposta.lower()
 
 
@@ -73,3 +73,81 @@ def test_agente_raciocina_para_achar_a_pergunta_certa_no_jsonl(real_llm_context)
     )
 
     assert "inventra.oficial@gmail.com" in resposta
+
+
+# --- Rota FAQ do grafo: busca em código + um único passo de redação do modelo ---------
+
+
+def _estado_faq(pergunta):
+    from langchain_core.messages import HumanMessage
+
+    return {"messages": [HumanMessage(content=pergunta)], "agentes_chamados": []}
+
+
+def _texto_final(resultado):
+    return resultado["messages"][-1]["content"]
+
+
+def test_rota_faq_usa_o_texto_do_modelo_com_os_trechos_encontrados(monkeypatch):
+    from langchain_core.messages import AIMessage
+
+    from iai.app.core.assistant import graph
+
+    vistos = []
+
+    class Modelo:
+        def invoke(self, entrada, config=None):
+            vistos.append(entrada)
+            return AIMessage(content="O OCR lê a foto do produto.")
+
+    monkeypatch.setattr(graph, "llm_especialista", Modelo())
+    resultado = graph.responder_faq(_estado_faq("O que é o OCR?"), config={})
+
+    assert _texto_final(resultado) == "O OCR lê a foto do produto."
+    assert "faq:respondido" in resultado["agentes_chamados"]
+    # O modelo recebe os trechos reais do FAQ e nenhuma tool.
+    assert (
+        "OCR" in vistos[0][-1].content
+        and "TRECHOS DA DOCUMENTAÇÃO" in vistos[0][-1].content
+    )
+
+
+def test_rota_faq_nunca_falha_quando_o_modelo_cai_e_devolve_o_faq_literal(monkeypatch):
+    from iai.app.core.assistant import graph
+    from iai.app.core.tools.faq import buscar_faq
+
+    class ModeloQuebrado:
+        def invoke(self, entrada, config=None):
+            raise RuntimeError("tool_use_failed key=AIzaSECRETO123")
+
+    monkeypatch.setattr(graph, "llm_especialista", ModeloQuebrado())
+    resultado = graph.responder_faq(_estado_faq("O que é o OCR?"), config={})
+
+    assert _texto_final(resultado) == buscar_faq("O que é o OCR?")[0]["resposta"]
+    assert "SECRETO" not in str(resultado)
+
+
+def test_rota_faq_sem_trecho_nao_chama_o_modelo_nem_inventa(monkeypatch):
+    from iai.app.core.assistant import graph
+
+    class ModeloProibido:
+        def invoke(self, *args, **kwargs):
+            raise AssertionError("o modelo não deve ser chamado sem trechos")
+
+    monkeypatch.setattr(graph, "llm_especialista", ModeloProibido())
+    resultado = graph.responder_faq(_estado_faq("zqxwy 99881777"), config={})
+
+    assert _texto_final(resultado) == graph.SEM_FAQ
+    assert "faq:respondido" not in resultado["agentes_chamados"]
+
+
+def test_rota_faq_com_base_invalida_responde_sem_quebrar(monkeypatch):
+    from iai.app.core.assistant import graph
+
+    def base_quebrada(pergunta, limite=4):
+        raise OSError("sem arquivo")
+
+    monkeypatch.setattr(graph, "buscar_faq", base_quebrada)
+    resultado = graph.responder_faq(_estado_faq("O que é o OCR?"), config={})
+
+    assert "indisponível" in _texto_final(resultado)
