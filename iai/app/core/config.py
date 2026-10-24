@@ -21,6 +21,12 @@ TYPESAFE_API_KEY = SecretStr(os.getenv("TYPESAFE_API_KEY", ""))
 JEV_MODEL = os.getenv("JEV_MODEL", "jev-1.13.0")
 JEV_APPROVAL_THRESHOLD = float(os.getenv("JEV_APPROVAL_THRESHOLD", "0.70"))
 JEV_TIMEOUT = float(os.getenv("JEV_TIMEOUT", "10"))
+# "escrita": só as tools propor_* passam pelo JUIZ (TypeSafe); consultas, FAQ e histórico
+# seguem com as validações determinísticas do gate (schema, perfil, segredos, uso único).
+# "todas": toda tool consulta o JEV antes de executar (mais lento e sujeito a falso bloqueio).
+JEV_ESCOPO = os.getenv("JEV_ESCOPO", "escrita").strip().lower()
+if JEV_ESCOPO not in {"escrita", "todas"}:
+    raise ValueError("JEV_ESCOPO inválido; use 'escrita' ou 'todas'.")
 if not 0.5 < JEV_APPROVAL_THRESHOLD <= 1 or not 0 < JEV_TIMEOUT <= 60:
     raise ValueError("Configuração JEV inválida: limiar > 0.5 e <= 1; timeout > 0 e <= 60.")
 MONGO_CONNECTION = SecretStr(os.getenv("MONGO_CONNECTION", "mongodb://localhost:27017"))

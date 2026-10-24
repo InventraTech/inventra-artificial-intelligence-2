@@ -1,14 +1,15 @@
 # IAI INVENTRA
 
 FastAPI + LangChain + LangGraph para conhecimento documental, consultas operacionais e
-propostas de alteração aprovadas por Supervisor. Esta branch não altera Spring nem frontend.
+pedidos de alteração (validados, **ainda não executados**: o human in the loop está por implementar).
+Esta branch não altera Spring nem frontend.
 
 Para compreender a arquitetura, as regras essenciais e os limites reais antes de trabalhar no código,
 consulte [Contexto da IAI para outras IAs](CONTEXTO_IAI_PARA_IAS.md).
 
 O chat **live** usa o [gate JEV pré-execução de tools](docs/JEV_GATE.md).
-Cada chamada é registrada e julgada antes de executar; isso não substitui a aprovação
-humana das alterações de negócio. Configure `TYPESAFE_API_KEY` para esse fluxo.
+Cada chamada é registrada e julgada antes de executar; isso não substitui a confirmação
+humana das alterações de negócio (ver [Human in the loop](#human-in-the-loop-a-implementar)). Configure `TYPESAFE_API_KEY` para esse fluxo.
 O demo determinístico continua disponível sem JEV real.
 
 ## Executar localmente
@@ -35,7 +36,7 @@ Se aparecer `pg_config` ou uma exigência de compilador C++ durante a instalaç�
 verifique a versão do Python e o arquivo de requisitos: a IAI não utiliza `jq` nem
 `psycopg2-binary`, e o acesso operacional ao PostgreSQL é feito pela API Spring.
 
-Para persistir solicitações e histórico (identidade e dados de negócio ainda simulados),
+Para persistir o histórico de conversas e as métricas (identidade e dados de negócio ainda simulados),
 use `IAI_STORAGE_MODE=mongo` e `MONGO_CONNECTION` apontando para um MongoDB.
 
 ### Testar no celular (mesma rede Wi-Fi)
@@ -75,7 +76,7 @@ Não exponha os modos mock publicamente.
 
 `POST /chat` preserva `session_id`, `user_id`, `pergunta` e resposta `{"resposta": "..."}`.
 O `user_id` deve corresponder à identidade autenticada. `request_id` opcional pode ser
-reutilizado pelo frontend ao repetir a mesma requisição; é a chave da rodada para propostas.
+reutilizado pelo frontend ao repetir a mesma requisição; identifica a rodada.
 
 ```json
 {
@@ -86,7 +87,7 @@ reutilizado pelo frontend ao repetir a mesma requisição; é a chave da rodada 
 }
 ```
 
-No demo, esse exemplo gera duas propostas. O saldo permanece igual até aprovação.
+No demo, esse exemplo gera dois pedidos validados e **não executados**; o saldo não muda.
 Esse intérprete tem cobertura limitada; compreensão geral de linguagem natural usa os
 agentes `IAI_LLM_MODE=live` e chaves Gemini/Groq. API de negócio e armazenamento podem
 continuar simulados enquanto se valida o provedor real.
@@ -110,14 +111,14 @@ propor cada operação (`ROLE_OPERATIONS`) estão em `GET /queries/capabilities`
 | Agente | Tools |
 |---|---|
 | Roteador | `buscar_historico` |
-| FAQ | `faq_retriever` |
-| Estoquista | `consultar_inventra`, `consultar_solicitacoes_iai`, `buscar_historico`, `faq_retriever` + propor: criar lote, registrar entrada, registrar saída, ajustar estoque, registrar inventário, registrar contagem, alterar contagem |
+| FAQ | sem tools: o nó `responder_faq` busca no FAQ em código e o modelo só redige (se falhar, devolve o texto literal do FAQ) |
+| Estoquista | `consultar_inventra`, `buscar_historico`, `faq_retriever` + propor: criar lote, registrar entrada, registrar saída, ajustar estoque, registrar inventário, registrar contagem, alterar contagem |
 | Comprador | as mesmas de consulta/histórico/FAQ + propor: criar requisição, adicionar/remover item, cancelar requisição, cadastrar/desativar fornecedor |
 | Supervisor | todas as anteriores + propor: criar/editar/desativar produto |
 
 `consultar_inventra` é uma única tool com o parâmetro `resource` (produtos, estoque, lotes,
-validade, fornecedores, requisições, inventários, alertas, catálogos etc.). Nenhuma tool aprova
-ou executa: as `propor_*` só criam propostas.
+validade, fornecedores, requisições, inventários, alertas, catálogos etc.). Nenhuma tool executa:
+as `propor_*` só validam o pedido e respondem que nada foi executado.
 
 ## Integração com a API Spring e com agentes externos (MCP)
 
@@ -132,7 +133,7 @@ O token fica só no contexto da requisição (não entra em prompt, histórico o
 | Tool (agente) | Endpoints consumidos |
 |---|---|
 | `consultar_inventra` (todos) | `GET /api/products`, `/api/suppliers`, `/api/stock-batches` (+ `/expiring-soon`, `/low-stock`), `/api/products/{id}/kitchen-parameters`, `/api/products/{id}/suppliers`, `/api/requisitions` (+ `/{id}/items`), `/api/inventories` (+ `/{id}/counts`), `/api/alerts`, `/api/categories`, `/api/units`, `/api/kitchens` |
-| `propor_*` (estoquista, comprador, supervisor) | só criam proposta no Mongo da IAI; depois da aprovação, a execução chama `POST/PUT/PATCH` em `/api/products`, `/api/suppliers`, `/api/stock-batches` (`restock`, `consume`, `adjust`), `/api/requisitions` (`items`, `cancel`) e `/api/inventories` (`counts`) |
+| `propor_*` (estoquista, comprador, supervisor) | hoje só validam (nada é gravado nem executado). Quando o HITL existir, a execução chamará `POST/PUT/PATCH` em `/api/products`, `/api/suppliers`, `/api/stock-batches` (`restock`, `consume`, `adjust`), `/api/requisitions` (`items`, `cancel`) e `/api/inventories` (`counts`) |
 
 **Erros:** a integração nunca derruba o agente. API fora do ar, timeout, status inesperado ou
 resposta inválida viram um resultado com código (`SERVICO_INDISPONIVEL`, `RESPOSTA_INVALIDA`,
@@ -153,10 +154,9 @@ subir a API. O servidor (`iai/app/extras/mcp_server.py`) usa transporte **stdio*
 processo e conversa por entrada/saída padrão (não há porta nem URL).
 
 - **Identidade:** vem de `IAI_MCP_TOKEN` (JWT do Spring), validado como no `/chat`. Cada
-  perfil vê só as tools do seu agente (estoquista 11, comprador 10, supervisor 20) e a regra
+  perfil vê só as tools do seu agente (estoquista 10, comprador 9, supervisor 19) e a regra
   `ROLE_OPERATIONS` continua valendo.
-- **Nada executa:** as `propor_*` só criam propostas; a aprovação continua em `/approvals`.
-  Cada chamada de tool é uma rodada nova, então repetir a mesma proposta cria outra proposta.
+- **Nada executa:** as `propor_*` só validam o pedido (a confirmação humana ainda não existe).
 - **Logs** vão para o stderr; o stdout é o canal do protocolo (nunca use `print`).
 
 Configuração do Cursor (`.cursor/mcp.json`) ou do Cline (`cline_mcp_settings.json`), com
@@ -179,23 +179,26 @@ Para testar sem o Spring, acrescente em `env` os modos de demonstração
 `"IAI_MCP_TOKEN": "demo-supervisor"`. No Cursor, deixe o chat em **Agent** (em Ask as tools MCP
 não executam) e confira os logs em View → Output → MCP Logs. Não coloque o token no Git.
 
-## Aprovação
+## Human in the loop (a implementar)
 
-1. Proposta criada por ferramenta do agente ou `POST /approvals`.
-2. Supervisor vê `GET /approvals/inbox`, restrito à sua cozinha.
-3. Envia `POST /approvals/{id}/decision` com decisão e hash da proposta.
-4. Execução única quando disponível. Resultado mock continua explicitamente identificado.
-5. Solicitante acompanha `GET /approvals/{id}` ou listagem de suas solicitações.
+O fluxo antigo de aprovação (coleção `approvals`, rotas `/approvals`, decisão, execução,
+prazo de 7 dias) foi **removido**. Hoje as `propor_*` só validam o pedido e devolvem "não
+executado". Quem for implementar o HITL parte de **um único ponto**:
 
-Quem pode **propor** o quê (chat ou `POST /approvals`; fora disso, 403):
-estoquista → lotes, entradas, saídas, ajustes, inventários e contagens; comprador →
-requisições e fornecedores; supervisor → tudo, inclusive produtos. O mapa fica em
-`ROLE_OPERATIONS` (`domain.py`) e aparece em `GET /queries/capabilities` (`allowed_roles`).
-A API Spring continua aplicando as próprias permissões na execução.
+`iai/app/core/inventra/acoes.py` → `solicitar_confirmacao(action, justification, ctx)`
 
-Prazo: 7 dias. Autoaprovação de Supervisor da mesma cozinha é permitida.
-Nenhuma tool do modelo aprova ou executa. Não há exclusão física pela IAI.
-Operações em itens/lotes distintos são propostas independentes, sem atomicidade de grupo.
+- Já pronto e reaproveitável: `snapshot()` (confere perfil, IDs e estado dos registros),
+  `domain.Action` / `ROLE_OPERATIONS` (operações e quem pode pedir cada uma) e
+  `business.gateway().execute(...)` (executa no Spring ou no mock com o JWT do solicitante).
+- Falta: guardar a ação pendente, pedir a confirmação a uma pessoa, revalidar e executar
+  UMA vez, e devolver ao agente o estado real. O passo a passo está no docstring do arquivo.
+- Textos ao usuário: `assistant/respostas.py` (`resposta_de_propostas`), prompts em
+  `assistant/prompts.py` ("PEDIDOS DE AÇÃO") e FAQ em `iai/data/faq_inventra.jsonl`.
+
+Quem pode **pedir** o quê (fora disso, 403): estoquista → lotes, entradas, saídas, ajustes,
+inventários e contagens; comprador → requisições e fornecedores; supervisor → tudo, inclusive
+produtos. O mapa fica em `ROLE_OPERATIONS` (`domain.py`) e aparece em
+`GET /queries/capabilities` (`allowed_roles`). Não há exclusão física pela IAI.
 
 ## Modos reais e dependências
 
@@ -221,6 +224,7 @@ a demonstração offline. Não publique o arquivo `.env` local.
 | MONGO_CONNECTION | MongoDB; não inclua credenciais no Git |
 | GEMINI_API_KEY / GROQ_API_KEY | provedores para agentes live |
 | TYPESAFE_API_KEY | TypeSafe/JEV para autorizar tools dos agentes live; falha bloqueia execução |
+| JEV_ESCOPO | `escrita` (padrão): o JEV julga só `propor_*`; `todas`: julga qualquer tool |
 | JEV_MODEL / JEV_APPROVAL_THRESHOLD / JEV_TIMEOUT | versão `jev-1.13.0`, limiar 0.70, timeout 10 s |
 | CORS_ORIGINS | origens exatas do frontend, separadas por vírgula (padrão `http://localhost:3000,http://localhost:5173`) |
 | METRICAS_REQ_USUARIO_SEMANA / METRICAS_VALOR_RESOLUCAO_USD | premissas do `/metrics` (padrão 10 e 1.50) |
@@ -229,15 +233,13 @@ API real não aceita identidade mock. JWT é validado por `GET /api/users/me`, s
 decodificação não verificada e sem segredo de assinatura compartilhado. Tokens permanecem
 apenas no contexto HTTP; não são colocados em prompts, checkpoints ou histórico.
 
-A execução real como outro solicitante depende de delegação ainda ausente no Spring.
-A aprovação permanece `APROVADA_PENDENTE_INTEGRACAO`. O solicitante pode apresentar
-JWT fresco em `POST /approvals/{id}/execute`; a API volta a aplicar suas permissões.
+Quando o HITL existir, a execução real como outro solicitante dependerá de delegação ainda
+ausente no Spring (não se usa o JWT de quem confirma no lugar do solicitante).
 Edição de contagem e remoção lógica de item também têm dependências externas.
 Não inventamos endpoints para essas capacidades.
 
 Uma falha após iniciar envio pode ser `RESULTADO_INCERTO`. A IAI não repete a escrita.
 Reconciliação/idempotência completa entre serviços depende do backend.
-A página de aprovação está em outro repositório e não foi criada aqui.
 
 ## Testes
 

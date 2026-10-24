@@ -63,8 +63,15 @@ def test_restock_adjustment_and_insufficient_balance():
     )
     from fastapi import HTTPException
 
+    from iai.app.core.inventra.acoes import solicitar_confirmacao
+    from iai.app.core.inventra.domain import Action
+
     with pytest.raises(HTTPException) as denied:
-        approved("registrar_saida", {"batchId": 1, "quantity": 10})
+        solicitar_confirmacao(
+            Action(operation="registrar_saida", parameters={"batchId": 1, "quantity": 10}),
+            "Saldo insuficiente",
+            context_for(),
+        )
     assert denied.value.status_code == 409
     assert (
         get_db().business_mock.find_one({"_id": "1:batch:1"})["data"]["currentQuantity"]
@@ -72,7 +79,7 @@ def test_restock_adjustment_and_insufficient_balance():
     )
 
 
-def test_requisition_items_are_added_removed_and_cancelled_with_approval():
+def test_requisition_items_are_added_removed_and_cancelled():
     req = approved("criar_requisicao", {"type": "PURCHASE", "origin": "cozinha"})
     rid = req["result"]["data"]["id"]
     assert req["result"]["data"]["requester"]["id"] == "demo-comprador"

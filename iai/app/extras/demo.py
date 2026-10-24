@@ -1,7 +1,7 @@
 """Intérprete determinístico LIMITADO, exclusivamente demonstrativo e sem LLM.
 
 O atendimento natural completo usa agentes live. Esta simulação permite provar o
-fluxo de aprovação offline; não é apresentada como capacidade geral de linguagem.
+fluxo dos pedidos de ação offline; não é apresentada como capacidade geral de linguagem.
 """
 
 import re
@@ -94,7 +94,7 @@ def demo_node(state):
         messages.append(
             {
                 "role": "assistant",
-                "content": "Confira as propostas demonstrativas; falta de dados não é execução.",
+                "content": "Pedidos validados, mas não executados (sem confirmação humana).",
             }
         )
         return {

@@ -129,8 +129,11 @@ def status_da_requisicao(agentes_chamados: list[str], falhou: bool) -> str:
 
 
 def foi_resolvida(agentes_chamados: list[str]) -> bool:
-    """Execução autorizada concluída; reconhece marcador legado de métricas antigas."""
-    return "jev:concluido" in agentes_chamados or "juiz:aprovado" in agentes_chamados
+    """Execução autorizada concluída (ou FAQ respondida da documentação); reconhece marcador legado."""
+    return any(
+        marcador in agentes_chamados
+        for marcador in ("jev:concluido", "faq:respondido", "juiz:aprovado")
+    )
 
 
 def registrar_requisicao(
