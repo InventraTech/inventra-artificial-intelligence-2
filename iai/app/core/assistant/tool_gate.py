@@ -31,6 +31,7 @@ from iai.app.core.assistant import judge
 from iai.app.core.config import (
     GEMINI_API_KEY,
     GROQ_API_KEY,
+    JEV_ESCOPO,
     TYPESAFE_API_KEY,
     business_date,
 )
@@ -40,6 +41,25 @@ from iai.app.core.inventra.domain import ROLE_OPERATIONS, Operation
 
 logger = logging.getLogger(__name__)
 SAFE_STOP = "Não consegui confirmar os dados para concluir esse pedido. Essa etapa não foi realizada; reformule o pedido para continuar."
+MOTIVOS_DE_RECUSA = {
+    "ROLE_NOT_ALLOWED": "o seu perfil não pode fazer essa operação.",
+    "TOOL_NOT_ALLOWED": "essa ferramenta não está disponível para este pedido.",
+    "SECRET_IN_ARGUMENTS": "o pedido contém algo que parece senha ou token; remova e tente de novo.",
+    "arguments_grounded": "não consegui identificar com certeza o produto, fornecedor ou lote citado. Diga o nome completo (e a marca ou a unidade).",
+    "business_rule_conflict": "esse pedido conflita com uma regra do Inventra.",
+    "unsafe_modification": "essa alteração precisa de confirmação humana.",
+    "missing_user_information": "falta uma informação que só você sabe.",
+}
+
+
+def mensagem_de_recusa(failed_checks):
+    """Texto para o usuário quando o gate para a etapa; nunca traz argumentos nem a conversa."""
+    for check in failed_checks or []:
+        if check in MOTIVOS_DE_RECUSA:
+            return f"Não consegui concluir esse pedido: {MOTIVOS_DE_RECUSA[check]} Essa etapa não foi realizada."
+    return SAFE_STOP
+
+
 UNAVAILABLE = "A consulta está temporariamente indisponível. Essa etapa não foi realizada; tente novamente mais tarde."
 FIELD_LABELS = {
     "quantity": "a quantidade e a unidade do produto",
@@ -116,6 +136,11 @@ def canonical(tool, args):
     if set(args) - set(properties):
         raise ValueError("Argumentos não declarados.")
     return schema.model_validate(args).model_dump(mode="json", exclude={"config"})
+
+
+def julga_com_jev(tool_name):
+    """Escrita (propor_*) sempre vai ao juiz; leitura só quando JEV_ESCOPO=todas."""
+    return JEV_ESCOPO == "todas" or tool_name.startswith("propor_")
 
 
 def fingerprint(name, args):
@@ -202,7 +227,21 @@ def event(record, name):
         "at": datetime.now(UTC).isoformat(),
         **{k: record[k] for k in ("id", "agent", "tool", "attempt")},
     }
-    logger.info(name, extra={"jev": data})
+    detail = {
+        key: record[key]
+        for key in ("decision", "failed_checks", "missing_field", "error_type")
+        if record.get(key)
+    }
+    # O log do Render precisa mostrar POR QUE o juiz recusou (sem argumentos nem conversa).
+    logger.info(
+        "%s agent=%s tool=%s attempt=%s %s",
+        name,
+        record["agent"],
+        record["tool"],
+        record["attempt"],
+        json.dumps(detail, ensure_ascii=False, default=str) if detail else "",
+        extra={"jev": data},
+    )
     return data
 
 
@@ -332,6 +371,18 @@ class JevToolGate(AgentMiddleware):
                 hard_error = "SECRET_IN_ARGUMENTS"
             if hard_error:
                 decision = judge.Decision(decision="REJECT", failed_checks=[hard_error])
+            elif not julga_com_jev(call["name"]):
+                try:
+                    args = canonical(tool, call["args"])
+                    decision = judge.Decision(decision="APPROVE")
+                    record["jev_dispensado"] = "leitura"
+                except (ValidationError, ValueError, TypeError):
+                    decision = judge.Decision(
+                        decision="RETRY_SPECIALIST"
+                        if record["attempt"] < judge.MAX_ATTEMPTS
+                        else "REJECT",
+                        failed_checks=["SCHEMA_INVALID"],
+                    )
             else:
                 try:
                     args = canonical(tool, call["args"])
@@ -366,7 +417,7 @@ class JevToolGate(AgentMiddleware):
                         "business_date": business_date().isoformat(),
                         "rules": [
                             "Reads do not change business data.",
-                            "propor_* only registers a proposal; human supervisor approval is still mandatory.",
+                            "propor_* only validates a requested action; it executes nothing (human-in-the-loop is not implemented yet).",
                             "IDs must come from authorized lookup or explicit user input; never ask users for internal IDs.",
                             "No physical deletion or cross-kitchen access. History is not current stock.",
                             "Default query options from the schema are allowed. Factual arguments cannot be invented.",
@@ -404,7 +455,12 @@ class JevToolGate(AgentMiddleware):
         record["status"] = decision.decision
         record["decided_at"] = datetime.now(UTC).isoformat()
         if decision.decision == "APPROVE":
-            events.append(event(record, "jev_approved"))
+            events.append(
+                event(
+                    record,
+                    "jev_dispensado" if record.get("jev_dispensado") else "jev_approved",
+                )
+            )
             # Uma autorização vale só para o nome+argumentos validados desta tentativa.
             permit = permit_var.set(
                 {"fingerprint": fingerprint(tool.name, args), "used": False}
@@ -428,7 +484,7 @@ class JevToolGate(AgentMiddleware):
             except Exception as exc:  # noqa: BLE001 - não repetir resultado potencialmente incerto
                 record["status"] = "FAILED"
                 record["error_type"] = type(exc).__name__
-                halt = "Não consegui confirmar o resultado dessa ferramenta. Consulte suas solicitações antes de repetir."
+                halt = "Não consegui confirmar o resultado dessa ferramenta. Confira o estado no sistema antes de repetir."
                 result = ToolMessage(
                     content='{"ok":false,"code":"TOOL_FAILED"}',
                     tool_call_id=call["id"],
@@ -457,7 +513,7 @@ class JevToolGate(AgentMiddleware):
                 halt = clarification(decision.missing_field)
                 events.append(event(record, "tool_user_input_required"))
             elif decision.decision == "REJECT":
-                halt = halt or SAFE_STOP
+                halt = halt or mensagem_de_recusa(decision.failed_checks)
             else:
                 events.append(event(record, "tool_retry"))
         record["finished_at"] = datetime.now(UTC).isoformat()

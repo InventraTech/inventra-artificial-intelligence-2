@@ -30,7 +30,7 @@ POSITIVE = {
 RISKS = {
     "missing_user_information": "Does this task require an essential fact or business choice only the user can provide?",
     "business_rule_conflict": "Does this candidate violate an INVENTRA rule stated in the context?",
-    "unsafe_modification": "Does this candidate attempt a business change without the required human approval?",
+    "unsafe_modification": "Does this candidate attempt a business change without the required human confirmation?",
 }
 ROUTES = {
     "agent_repair": "Existing context or an authorized lookup can resolve the defect.",

@@ -119,9 +119,4 @@ def authenticate(
     return RequestContext(identity, SecretStr(token))
 
 
-def require_supervisor(ctx: RequestContext):
-    if ctx.identity.role != "SUPERVISOR":
-        raise HTTPException(403, "A decisão exige Supervisor da mesma cozinha.")
-
-
 Authenticated = Annotated[RequestContext, Depends(authenticate)]

@@ -16,7 +16,6 @@ def client():
 
 
 def test_routes_require_bearer_and_reject_forged_identity(client):
-    assert client.get("/approvals").status_code == 401
     assert client.get("/metrics").status_code == 401
     response = client.post(
         "/chat",
@@ -25,10 +24,10 @@ def test_routes_require_bearer_and_reject_forged_identity(client):
     )
     assert response.status_code == 403
     assert get_db().sessions.count_documents({}) == 0
-    assert client.get("/approvals", headers=auth("not-a-demo-token")).status_code == 401
+    assert client.get("/metrics", headers=auth("not-a-demo-token")).status_code == 401
 
 
-def test_end_to_end_proposal_inbox_decision_and_history(client):
+def test_end_to_end_action_request_is_not_executed_and_history(client):
     response = client.post(
         "/chat",
         headers=auth(),
@@ -39,25 +38,13 @@ def test_end_to_end_proposal_inbox_decision_and_history(client):
         },
     )
     assert response.status_code == 200
-    assert "AGUARDANDO_APROVACAO" in response.json()["resposta"]
+    assert "Nada foi alterado" in response.json()["resposta"]
     assert "MOCK" in response.json()["resposta"]
-    pending = client.get("/approvals/inbox", headers=auth("demo-supervisor")).json()[
-        "items"
-    ]
-    assert len(pending) == 2
-    for p in pending:
-        response = client.post(
-            f"/approvals/{p['id']}/decision",
-            headers=auth("demo-supervisor"),
-            json={"decision": "approve", "proposal_hash": p["proposal_hash"]},
-        )
-        assert response.json()["status"] == "CONCLUIDA"
-        assert response.json()["result"]["mocked"] is True
+    # Sem human in the loop: não existe fila de aprovação e o estoque não muda.
+    assert client.get("/approvals", headers=auth("demo-supervisor")).status_code == 404
     assert (
-        client.get("/approvals/inbox", headers=auth("demo-outra-cozinha")).json()[
-            "items"
-        ]
-        == []
+        get_db().business_mock.find_one({"_id": "1:batch:1"})["data"]["currentQuantity"]
+        == 50
     )
     assert (
         client.post(
@@ -94,7 +81,7 @@ def test_end_to_end_proposal_inbox_decision_and_history(client):
         "Depois de preparar o almoço, usei 10 kg de arroz. Você pode registrar isso?",
     ],
 )
-def test_demo_natural_variations_create_proposals_without_consuming(client, text):
+def test_demo_natural_variations_validate_requests_without_consuming(client, text):
     response = client.post(
         "/chat",
         headers=auth(),
@@ -102,7 +89,7 @@ def test_demo_natural_variations_create_proposals_without_consuming(client, text
     )
     assert response.status_code == 200
     assert "INTERPRETAÇÃO DEMO" in response.json()["resposta"]
-    assert get_db().approvals.count_documents({"status": "AGUARDANDO_APROVACAO"}) == 1
+    assert "Nada foi alterado" in response.json()["resposta"]
     assert (
         get_db().business_mock.find_one({"_id": "1:batch:1"})["data"]["currentQuantity"]
         == 50
@@ -117,7 +104,7 @@ def test_same_session_name_does_not_mix_users_and_restart_rehydrates(client):
             json={
                 "session_id": "common",
                 "user_id": token,
-                "pergunta": "Como funcionam as aprovações?",
+                "pergunta": "Como funcionam os perfis?",
             },
         )
         assert response.status_code == 200
@@ -137,19 +124,6 @@ def test_modes_are_observable_and_parameters_validated(client):
     health = client.get("/health")
     assert health.json()["modes"]["auth"] == "mock"
     assert health.headers["X-IAI-Business-Mode"] == "mock"
-    assert client.get("/approvals?limit=10000", headers=auth()).status_code == 422
-    assert (
-        client.post(
-            "/approvals",
-            headers=auth(),
-            json={
-                "action": {"operation": "delete_product", "parameters": {}},
-                "justification": "Delete",
-                "idempotency_key": "key",
-            },
-        ).status_code
-        == 422
-    )
     assert (
         client.post(
             "/queries", headers=auth(), json={"resource": "estoque_minimo"}

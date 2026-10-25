@@ -1,5 +1,6 @@
 import asyncio
-from contextlib import asynccontextmanager, suppress
+import logging
+from contextlib import asynccontextmanager
 
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
@@ -14,17 +15,14 @@ from iai.app.core.config import (
     STORAGE_MODE,
 )
 from iai.app.core.infra.storage import get_db, initialize_storage
-from iai.app.core.inventra.approvals import expire_pending
-from iai.app.core.routes import approvals, chat, metrics, queries
+from iai.app.core.routes import chat, metrics, queries
 
-
-async def expiration_worker():
-    while True:
-        try:
-            await asyncio.to_thread(expire_pending)
-        except PyMongoError:
-            pass  # /health informa indisponibilidade; não converter execução em sucesso
-        await asyncio.sleep(30)
+# Sem isso o Python só mostra WARNING+: as decisões do JEV (INFO) nunca chegavam aos logs do Render.
+logging.basicConfig(
+    level=logging.INFO, format="%(levelname)s:%(name)s: %(message)s"
+)
+for _barulhento in ("httpx", "httpcore", "pymongo", "urllib3"):
+    logging.getLogger(_barulhento).setLevel(logging.WARNING)
 
 
 @asynccontextmanager
@@ -33,17 +31,13 @@ async def lifespan(app):
         await asyncio.to_thread(initialize_storage)
     except PyMongoError:
         pass
-    task = asyncio.create_task(expiration_worker())
     yield
-    task.cancel()
-    with suppress(asyncio.CancelledError):
-        await task
 
 
 app = FastAPI(
     title="IAI - Inteligência Artificial do Inventra",
     version="0.2.0",
-    description="Consultas e propostas aprovadas. Modos mock são explicitamente identificados.",
+    description="Consultas e ações validadas. A confirmação humana (HITL) ainda não está implementada. Modos mock são explicitamente identificados.",
     lifespan=lifespan,
 )
 if CORS_ORIGINS:
@@ -55,7 +49,6 @@ if CORS_ORIGINS:
         allow_headers=["Authorization", "Content-Type"],
     )
 app.include_router(chat.router)
-app.include_router(approvals.router)
 app.include_router(queries.router)
 app.include_router(metrics.router)
 
