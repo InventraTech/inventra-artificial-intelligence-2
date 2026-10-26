@@ -47,6 +47,7 @@ from iai.app.core.config import BUSINESS_MODE, LLM_MODE
 from iai.app.core.infra.metrics import ColetorMetricas, registrar_requisicao
 from iai.app.core.infra.security import context
 from iai.app.core.schemas import Estado
+from iai.app.core.tools.documentos import TOOLS_DOCUMENTOS
 from iai.app.core.tools.faq import (
     BASE_INDISPONIVEL,
     buscar_faq,
@@ -101,27 +102,36 @@ orquestrador_app = orquestrador_prompt | llm_rapido
 
 estoquista_app = create_agent(  # type: ignore[call-overload]
     model=llm_especialista,
-    tools=STOCK_TOOLS + TOOLS_MEMORIA + [faq_retriever],
+    tools=STOCK_TOOLS + TOOLS_MEMORIA + TOOLS_DOCUMENTOS + [faq_retriever],
     middleware=[
-        JevToolGate("estoquista", STOCK_TOOLS + TOOLS_MEMORIA + [faq_retriever]),
+        JevToolGate(
+            "estoquista",
+            STOCK_TOOLS + TOOLS_MEMORIA + TOOLS_DOCUMENTOS + [faq_retriever],
+        ),
         _prompt_com_data(ESTOQUISTA_SYSTEM_PROMPT),
     ],
 )
 
 comprador_app = create_agent(  # type: ignore[call-overload]
     model=llm_especialista,
-    tools=BUY_TOOLS + TOOLS_MEMORIA + [faq_retriever],
+    tools=BUY_TOOLS + TOOLS_MEMORIA + TOOLS_DOCUMENTOS + [faq_retriever],
     middleware=[
-        JevToolGate("comprador", BUY_TOOLS + TOOLS_MEMORIA + [faq_retriever]),
+        JevToolGate(
+            "comprador",
+            BUY_TOOLS + TOOLS_MEMORIA + TOOLS_DOCUMENTOS + [faq_retriever],
+        ),
         _prompt_com_data(COMPRADOR_SYSTEM_PROMPT),
     ],
 )
 
 supervisor_app = create_agent(  # type: ignore[call-overload]
     model=llm_especialista,
-    tools=SUPERVISOR_TOOLS + TOOLS_MEMORIA + [faq_retriever],
+    tools=SUPERVISOR_TOOLS + TOOLS_MEMORIA + TOOLS_DOCUMENTOS + [faq_retriever],
     middleware=[
-        JevToolGate("supervisor", SUPERVISOR_TOOLS + TOOLS_MEMORIA + [faq_retriever]),
+        JevToolGate(
+            "supervisor",
+            SUPERVISOR_TOOLS + TOOLS_MEMORIA + TOOLS_DOCUMENTOS + [faq_retriever],
+        ),
         _prompt_com_data(SUPERVISOR_SYSTEM_PROMPT),
     ],
 )
