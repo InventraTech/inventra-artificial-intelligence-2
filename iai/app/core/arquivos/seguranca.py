@@ -16,6 +16,7 @@ import unicodedata
 import zipfile
 from dataclasses import dataclass
 from pathlib import PurePath
+from typing import cast
 
 from iai.app.core.config import ARQUIVOS_MAX_BYTES, ARQUIVOS_MAX_CARACTERES
 
@@ -363,6 +364,7 @@ def _inspecionar_pdf(dados: bytes) -> None:
             )
     from pypdf import PdfReader
     from pypdf.errors import PyPdfError
+    from pypdf.generic import DictionaryObject
 
     try:
         leitor = PdfReader(io.BytesIO(dados), strict=False)
@@ -374,7 +376,7 @@ def _inspecionar_pdf(dados: bytes) -> None:
             raise ArquivoRecusado(
                 "muito_grande", f"O PDF tem mais de {MAX_PAGINAS_PDF} páginas."
             )
-        raiz = leitor.trailer["/Root"]
+        raiz = cast(DictionaryObject, leitor.trailer["/Root"])
         if "/OpenAction" in raiz or "/AA" in raiz:
             raise ArquivoRecusado("conteudo_ativo", "O PDF contém ação automática.")
         nomes = raiz.get("/Names")
@@ -434,13 +436,13 @@ def _processar_imagem(dados: bytes) -> tuple[bytes, str]:
                 raise ArquivoRecusado(
                     "muito_grande", "A imagem tem resolução alta demais."
                 )
-            imagem = ImageOps.exif_transpose(imagem)
-            imagem.thumbnail((LADO_MAXIMO_IMAGEM, LADO_MAXIMO_IMAGEM))
+            ajustada = ImageOps.exif_transpose(imagem)
+            ajustada.thumbnail((LADO_MAXIMO_IMAGEM, LADO_MAXIMO_IMAGEM))
             saida = io.BytesIO()
-            if formato == "PNG" and imagem.mode in {"RGBA", "LA", "P", "L", "RGB"}:
-                imagem.save(saida, format="PNG")
+            if formato == "PNG" and ajustada.mode in {"RGBA", "LA", "P", "L", "RGB"}:
+                ajustada.save(saida, format="PNG")
                 return saida.getvalue(), "image/png"
-            imagem.convert("RGB").save(saida, format="JPEG", quality=88)
+            ajustada.convert("RGB").save(saida, format="JPEG", quality=88)
             return saida.getvalue(), "image/jpeg"
     except ArquivoRecusado:
         raise

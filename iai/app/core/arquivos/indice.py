@@ -125,7 +125,7 @@ class EmbedderGemini:
 
         self._cliente = GoogleGenerativeAIEmbeddings(
             model=EMBEDDING_MODEL,
-            google_api_key=GEMINI_API_KEY,
+            api_key=GEMINI_API_KEY,
             output_dimensionality=EMBEDDING_DIM,
         )
 
