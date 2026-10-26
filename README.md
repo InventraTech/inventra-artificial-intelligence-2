@@ -7,8 +7,9 @@ Para compreender a arquitetura, as regras essenciais e os limites reais antes de
 consulte [Contexto da IAI para outras IAs](CONTEXTO_TECNICO_IA_ATUAL.md).
 
 O chat **live** usa o [gate JEV pré-execução de tools](iai/app/core/assistant/tool_gate.py).
-Cada chamada é registrada e julgada antes de executar; isso não substitui a aprovação
-humana das alterações de negócio. Configure `TYPESAFE_API_KEY` para esse fluxo.
+Cada chamada é registrada e validada antes de executar. `JEV_ESCOPO=escrita` (padrão)
+consulta o JEV nas propostas; `todas` inclui também as leituras. Isso não substitui a aprovação
+humana das alterações de negócio. Configure `TYPESAFE_API_KEY` para as chamadas que exigem JEV.
 O demo determinístico continua disponível sem JEV real.
 
 ## Executar localmente
@@ -117,7 +118,7 @@ O histórico continua textual; os artefatos não são persistidos como visualiza
 
 Leituras independentes de `consultar_inventra`, `faq_retriever`, `buscar_historico` e `buscar_documentos` podem ser emitidas
 no mesmo lote e executadas com concorrência máxima de quatro. O `ToolNode` faz fan-in antes de
-retomar o especialista. Cada chamada live continua passando individualmente pelo JEV. Evidências
+retomar o especialista. Cada chamada live conserva o gate; leituras consultam o JEV com `JEV_ESCOPO=todas`. Evidências
 são uma fotografia anterior ao lote, e permissões de uso único permanecem isoladas por contexto.
 Lotes com proposta são processados uma etapa por vez; criação, confirmação e execução são sequenciais.
 Falhas de fontes complementares podem produzir resposta parcial, sem executar a chamada rejeitada.
@@ -289,7 +290,7 @@ a demonstração offline. Não publique o arquivo `.env` local.
 | MONGO_CONNECTION | MongoDB; não inclua credenciais no Git |
 | GEMINI_API_KEY / GROQ_API_KEY | provedores para agentes live |
 | TYPESAFE_API_KEY | TypeSafe/JEV para autorizar tools dos agentes live; falha bloqueia execução |
-| JEV_ESCOPO | `todas` obrigatório: cada leitura/proposta live é julgada individualmente; `escrita` é recusado nesta branch |
+| JEV_ESCOPO | `escrita` (padrão): JEV nas propostas; `todas`: também nas leituras. Ambos mantêm as validações locais do gate |
 | QDRANT_URL / QDRANT_API_KEY | serviço Qdrant para documentos; sem configuração, upload/listagem respondem 503 e o restante funciona |
 | QDRANT_COLLECTION / EMBEDDING_MODEL / EMBEDDING_DIM | `inventra_documentos`, `gemini-embedding-001`, 768; outra dimensão exige coleção compatível |
 | ARQUIVOS_MAX_BYTES / ARQUIVOS_MAX_POR_ENVIO / ARQUIVOS_MAX_POR_USUARIO / ARQUIVOS_MAX_CARACTERES | 10 MB, 10 por envio, 50 por usuário, 120 mil caracteres por arquivo |
@@ -316,8 +317,8 @@ A página de aprovação está em outro repositório e não foi criada aqui.
 
 A branch `fix/human-in-the-loop` incorpora os commits `d9b3023` (#22) e `ae7155c` (#23).
 Mantém artefatos, confirmação do solicitante e paralelismo, adaptando o ponto de entrada
-`inventra/acoes.py` ao serviço durável de propostas. A remoção do HITL e a dispensa de JEV
-nas leituras não foram adotadas. O FAQ usa busca determinística autorizada e fallback literal
+`inventra/acoes.py` ao serviço durável de propostas. Na revisão do PR #24, foi restaurado
+`JEV_ESCOPO=escrita` como padrão, com `todas` disponível. O FAQ usa busca determinística autorizada e fallback literal
 se o modelo falhar, sem dispensar o gate. Detalhes em [CONSOLIDACAO_MAIN.md](CONSOLIDACAO_MAIN.md).
 
 ## Testes

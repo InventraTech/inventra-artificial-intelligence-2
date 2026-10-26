@@ -32,6 +32,10 @@ A branch existente foi consolidada por merge, sem reset, rebase, descarte de tra
 
 ## Conflitos e decisões
 
+Registro histórico da integração. A revisão posterior do PR #24 restaurou `JEV_ESCOPO=escrita`
+como padrão e manteve `todas` como opção; as decisões sobre JEV abaixo descrevem o momento do merge.
+O gate local, as permissões de uso único e o paralelismo permanecem ativos nos dois escopos.
+
 O Git encontrou 13 conflitos explícitos (conteúdo ou remoção/modificação). Também foram revisadas
 mudanças que o merge aplicou automaticamente, pois ausência de conflito textual não garante compatibilidade.
 

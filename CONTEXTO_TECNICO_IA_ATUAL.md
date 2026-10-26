@@ -9,7 +9,7 @@ Caminhos partem da raiz do repositório.
 
 FastAPI autentica Bearer e cria `RequestContext` por `ContextVar`. LangGraph executa
 guardrails, roteador, um especialista e saída. Agentes LangChain chamam ferramentas;
-JEV autoriza individualmente cada ferramenta live antes da execução. Negócio é consultado
+O gate autoriza individualmente cada ferramenta live; o escopo define quais consultam o JEV. Negócio é consultado
 pela API Spring ou por `MockGateway`; armazenamento usa MongoDB ou mongomock.
 
 Há três evoluções implementadas: artefatos de apresentação, confirmação do próprio
@@ -21,7 +21,7 @@ Invariantes:
 - `propor_*` apenas persiste a ação exata, com hash, snapshot e justificativa.
 - Somente o próprio solicitante autenticado pode confirmar/rejeitar/executar sua ação.
   Supervisor não confirma ações alheias. As permissões de cargo continuam obrigatórias.
-- JEV é anterior à ferramenta e não substitui confirmação humana.
+- Quando exigido pelo escopo, JEV é anterior à ferramenta e não substitui confirmação humana.
 - Nenhum JWT é persistido para execução futura.
 - Usuários, inclusive Supervisor, permanecem limitados à cozinha autenticada.
 - Mock/demo são identificados; resultados demonstrativos não são dados de produção.
@@ -110,7 +110,7 @@ Ausência de chaves generativas no live retorna 503; falhas inesperadas, 502 seg
 - Ambos têm `source` e `mocked`.
 
 Fontes precisam ser ToolResults operacionais bem-sucedidos da rodada atual, associados à
-chamada original. No live, precisam também de registro JEV `EXECUTED`. FAQ/histórico/documentos enviados não
+chamada original. No live, precisam também de registro do gate `EXECUTED`. FAQ/histórico/documentos enviados não
 são fontes numéricas para artefatos; saldos vêm das consultas operacionais. Projeção usa whitelist de campos dos contratos.
 
 O modelo rápido escolhe somente `kind=none|table|bar|pie` e `source_id`; não recebe poder de
@@ -127,22 +127,23 @@ preserva a consulta textual e informa a limitação. Não há HTML, renderizaç�
 ## 6. JEV e concorrência
 
 `after_model` captura candidatos PENDING_JEV com fingerprint, identidade, rodada e tentativa.
-Verifica ferramenta, schema, perfil e segredos; envia pedido/evidências sanitizados à TypeSafe.
+Verifica ferramenta, schema, perfil e segredos. Quando exigido pelo escopo, envia pedido/evidências sanitizados à TypeSafe.
 Política exige positivos >= 0,70 e riscos <= 0,30 por padrão. Decisões: APPROVE,
 RETRY_SPECIALIST (até três tentativas de reparo), ASK_USER ou REJECT. Falha não autoriza ferramenta.
 `protect_tool` exige permissão de uso único no escopo live, vinculada a nome/argumentos.
 
 Concorrência máxima de quatro. Somente lotes com múltiplas leituras da whitelist
 `consultar_inventra`, `faq_retriever`, `buscar_historico`, `buscar_documentos` liberam o bloqueio abrangente.
-Cada chamada conserva JEV próprio. Captura evidências anteriores ao lote; atualizações
+Cada chamada conserva autorização própria no gate. Captura evidências anteriores ao lote; atualizações
 compartilhadas usam lock curto. ToolNode propaga ContextVar e agrega mensagens/Commands.
 Lotes com proposta conservam apenas a primeira etapa para o modelo continuar sequencialmente.
-JEV_ESCOPO=todas é obrigatório; a dispensa de leituras existente na main é incompatível com esta política.
+`JEV_ESCOPO=escrita` é o padrão: propostas `propor_*` exigem JEV; leituras mantêm validações locais, sem TypeSafe.
+`JEV_ESCOPO=todas` exige JEV individual também nas leituras. A dispensa é registrada como `jev_dispensado=leitura`.
 
 Fontes com erro não fornecem dados. Se uma leitura funciona e outra fica indisponível,
 permite síntese parcial sem executar a rejeitada. Rejeições de segurança ou pedido de
 esclarecimento mantêm parada segura. A relevância e independência das fontes são orientadas
-pelos prompts e pela avaliação individual de necessidade/fundamentação do JEV.
+pelos prompts e, quando o escopo exige JEV, pela avaliação individual de necessidade/fundamentação.
 
 REST direto, MCP e demo não são turnos live e não usam TypeSafe; schemas, identidade e
 confirmação de escrita continuam aplicados. O demo usa grafo compilado com ToolNode para

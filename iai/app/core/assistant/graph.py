@@ -473,7 +473,7 @@ def especialista_node(nome):
 grafo.add_node("estoquista", especialista_node("estoquista"))
 grafo.add_node("comprador", especialista_node("comprador"))
 grafo.add_node("supervisor", especialista_node("supervisor"))
-grafo.add_node("faq", responder_faq)
+grafo.add_node("faq", responder_faq)  # type: ignore[call-overload,arg-type]
 grafo.add_node("orquestrador", no_orquestrador)  # type: ignore[call-overload,arg-type]
 grafo.add_node("guardrail_saida", no_guardrail_saida)  # type: ignore[call-overload,arg-type]
 
@@ -642,7 +642,6 @@ def executar_fluxo_chat(
                 )
                 for p in reversed(proposals)
             ]
-            response += "\nRevise os parâmetros acima e confirme ou rejeite cada ação. A alteração só será executada após sua confirmação e a revalidação dos dados."
         elif not output.get("jev_halt"):
             from iai.app.core.assistant.artifacts import present
 

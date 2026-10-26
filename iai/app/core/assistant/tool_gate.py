@@ -31,6 +31,7 @@ from iai.app.core.assistant import judge
 from iai.app.core.config import (
     GEMINI_API_KEY,
     GROQ_API_KEY,
+    JEV_ESCOPO,
     TYPESAFE_API_KEY,
     business_date,
 )
@@ -132,6 +133,10 @@ def live_tool_scope():
         yield scope_var.get()
     finally:
         scope_var.reset(marker)
+
+
+def julga_com_jev(tool_name):
+    return JEV_ESCOPO == "todas" or tool_name.startswith("propor_")
 
 
 def canonical(tool, args):
@@ -401,6 +406,18 @@ class JevToolGate(AgentMiddleware):
                 hard_error = "SECRET_IN_ARGUMENTS"
             if hard_error:
                 decision = judge.Decision(decision="REJECT", failed_checks=[hard_error])
+            elif not julga_com_jev(call["name"]):
+                try:
+                    args = canonical(tool, call["args"])
+                    decision = judge.Decision(decision="APPROVE")
+                    record["jev_dispensado"] = "leitura"
+                except (ValidationError, ValueError, TypeError):
+                    decision = judge.Decision(
+                        decision="RETRY_SPECIALIST"
+                        if record["attempt"] < judge.MAX_ATTEMPTS
+                        else "REJECT",
+                        failed_checks=["SCHEMA_INVALID"],
+                    )
             else:
                 try:
                     args = canonical(tool, call["args"])
@@ -473,7 +490,14 @@ class JevToolGate(AgentMiddleware):
         record["status"] = decision.decision
         record["decided_at"] = datetime.now(UTC).isoformat()
         if decision.decision == "APPROVE":
-            events.append(event(record, "jev_approved"))
+            events.append(
+                event(
+                    record,
+                    "jev_dispensado"
+                    if record.get("jev_dispensado")
+                    else "jev_approved",
+                )
+            )
             # Uma autorização vale só para o nome+argumentos validados desta tentativa.
             permit = permit_var.set(
                 {"fingerprint": fingerprint(tool.name, args), "used": False}

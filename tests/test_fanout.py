@@ -7,7 +7,7 @@ from langchain_core.language_models.fake_chat_models import FakeMessagesListChat
 from langchain_core.messages import AIMessage, HumanMessage
 from langchain_core.tools import tool
 
-from iai.app.core.assistant import judge
+from iai.app.core.assistant import judge, tool_gate
 from iai.app.core.assistant.tool_gate import JevToolGate, live_tool_scope, protect_tool
 from iai.app.core.infra.security import context, current_context
 from iai.app.extras.demo import plan_demo_reads
@@ -50,9 +50,12 @@ def run(app, token="demo-estoquista"):
         current_context.reset(marker)
 
 
+@pytest.mark.parametrize("scope", ["escrita", "todas"])
 def test_live_fanout_overlaps_both_judgment_and_tools_and_fanin_preserves_context(
     monkeypatch,
+    scope,
 ):
+    monkeypatch.setattr(tool_gate, "JEV_ESCOPO", scope)
     judgment_barrier, tool_barrier = Barrier(2), Barrier(2)
     observed, evaluations = [], []
 
@@ -103,7 +106,8 @@ def test_live_fanout_overlaps_both_judgment_and_tools_and_fanin_preserves_contex
     )
     monkeypatch.setattr(judge, "evaluate", evaluate)
     result = run(app)
-    assert len(evaluations) == len(observed) == 2
+    assert len(observed) == 2
+    assert len(evaluations) == (2 if scope == "todas" else 0)
     assert all(
         v[1:]
         == (
@@ -124,6 +128,10 @@ def test_live_fanout_overlaps_both_judgment_and_tools_and_fanin_preserves_contex
     assert len(result["jev_calls"]) == 2
     assert all(c["status"] == "EXECUTED" for c in result["jev_calls"].values())
     assert result["jev_parallel"] is True
+    assert all(
+        (record.get("jev_dispensado") == "leitura") == (scope == "escrita")
+        for record in result["jev_calls"].values()
+    )
 
 
 @pytest.mark.parametrize("essential_fails", [False, True])
