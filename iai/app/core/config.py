@@ -31,6 +31,30 @@ if not 0.5 < JEV_APPROVAL_THRESHOLD <= 1 or not 0 < JEV_TIMEOUT <= 60:
     raise ValueError("Configuração JEV inválida: limiar > 0.5 e <= 1; timeout > 0 e <= 60.")
 MONGO_CONNECTION = SecretStr(os.getenv("MONGO_CONNECTION", "mongodb://localhost:27017"))
 
+# --- Arquivos enviados pelo usuário (índice vetorial no Qdrant) ------------------------------
+# Sem QDRANT_URL/QDRANT_API_KEY o recurso fica desligado (a IA sobe normalmente sem ele).
+QDRANT_URL = os.getenv("QDRANT_URL", "").strip().rstrip("/")
+QDRANT_API_KEY = SecretStr(os.getenv("QDRANT_API_KEY", ""))
+QDRANT_COLLECTION = os.getenv("QDRANT_COLLECTION", "inventra_documentos").strip()
+EMBEDDING_MODEL = os.getenv("EMBEDDING_MODEL", "gemini-embedding-001").strip()
+EMBEDDING_DIM = int(os.getenv("EMBEDDING_DIM", "768"))
+ARQUIVOS_MAX_BYTES = int(os.getenv("ARQUIVOS_MAX_BYTES", str(10 * 1024 * 1024)))
+ARQUIVOS_MAX_POR_ENVIO = int(os.getenv("ARQUIVOS_MAX_POR_ENVIO", "10"))
+ARQUIVOS_MAX_POR_USUARIO = int(os.getenv("ARQUIVOS_MAX_POR_USUARIO", "50"))
+ARQUIVOS_MAX_CARACTERES = int(os.getenv("ARQUIVOS_MAX_CARACTERES", "120000"))
+# "on" (padrão): além das regras fixas, um modelo de segurança confere o conteúdo do arquivo.
+ARQUIVOS_GUARDRAIL_LLM = os.getenv("ARQUIVOS_GUARDRAIL_LLM", "on").strip().lower()
+if ARQUIVOS_GUARDRAIL_LLM not in {"on", "off"}:
+    raise ValueError("ARQUIVOS_GUARDRAIL_LLM inválido; use 'on' ou 'off'.")
+if min(
+    EMBEDDING_DIM,
+    ARQUIVOS_MAX_BYTES,
+    ARQUIVOS_MAX_POR_ENVIO,
+    ARQUIVOS_MAX_POR_USUARIO,
+    ARQUIVOS_MAX_CARACTERES,
+) <= 0:
+    raise ValueError("Limites de arquivos e EMBEDDING_DIM devem ser positivos.")
+
 PRECOS_MODELOS_USD_POR_MILHAO: dict[str, tuple[float, float]] = {
     "gemini-2.5-flash":             (0.30, 2.50),
     "openai/gpt-oss-20b":           (0.075, 0.30),

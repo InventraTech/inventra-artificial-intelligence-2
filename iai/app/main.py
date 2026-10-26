@@ -15,7 +15,7 @@ from iai.app.core.config import (
     STORAGE_MODE,
 )
 from iai.app.core.infra.storage import get_db, initialize_storage
-from iai.app.core.routes import chat, metrics, queries
+from iai.app.core.routes import arquivos, chat, metrics, queries
 
 # Sem isso o Python só mostra WARNING+: as decisões do JEV (INFO) nunca chegavam aos logs do Render.
 logging.basicConfig(
@@ -45,10 +45,11 @@ if CORS_ORIGINS:
         CORSMiddleware,
         allow_origins=CORS_ORIGINS,
         allow_credentials=False,
-        allow_methods=["GET", "POST"],
+        allow_methods=["GET", "POST", "DELETE"],
         allow_headers=["Authorization", "Content-Type"],
     )
 app.include_router(chat.router)
+app.include_router(arquivos.router)
 app.include_router(queries.router)
 app.include_router(metrics.router)
 

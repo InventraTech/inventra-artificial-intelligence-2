@@ -112,8 +112,8 @@ propor cada operação (`ROLE_OPERATIONS`) estão em `GET /queries/capabilities`
 |---|---|
 | Roteador | `buscar_historico` |
 | FAQ | sem tools: o nó `responder_faq` busca no FAQ em código e o modelo só redige (se falhar, devolve o texto literal do FAQ) |
-| Estoquista | `consultar_inventra`, `buscar_historico`, `faq_retriever` + propor: criar lote, registrar entrada, registrar saída, ajustar estoque, registrar inventário, registrar contagem, alterar contagem |
-| Comprador | as mesmas de consulta/histórico/FAQ + propor: criar requisição, adicionar/remover item, cancelar requisição, cadastrar/desativar fornecedor |
+| Estoquista | `consultar_inventra`, `buscar_historico`, `buscar_documentos`, `faq_retriever` + propor: criar lote, registrar entrada, registrar saída, ajustar estoque, registrar inventário, registrar contagem, alterar contagem |
+| Comprador | as mesmas de consulta/histórico/documentos/FAQ + propor: criar requisição, adicionar/remover item, cancelar requisição, cadastrar/desativar fornecedor |
 | Supervisor | todas as anteriores + propor: criar/editar/desativar produto |
 
 `consultar_inventra` é uma única tool com o parâmetro `resource` (produtos, estoque, lotes,
@@ -179,6 +179,40 @@ Para testar sem o Spring, acrescente em `env` os modos de demonstração
 `"IAI_MCP_TOKEN": "demo-supervisor"`. No Cursor, deixe o chat em **Agent** (em Ask as tools MCP
 não executam) e confira os logs em View → Output → MCP Logs. Não coloque o token no Git.
 
+## Documentos como contexto (arquivos + Qdrant)
+
+O usuário envia arquivos e os agentes passam a consultá-los com a tool `buscar_documentos`.
+
+| Rota | O que faz |
+|---|---|
+| `POST /arquivos` | multipart: `arquivos` (um ou vários, até `ARQUIVOS_MAX_POR_ENVIO`) e `compartilhar` (opcional; só SUPERVISOR). Pasta = vários arquivos; o caminho relativo no nome do arquivo vira o campo `pasta`. Devolve o status de cada arquivo (`indexado`/`recusado`/`erro`) |
+| `GET /arquivos` | documentos do usuário e os compartilhados pelo supervisor da cozinha |
+| `DELETE /arquivos/{arquivo_id}` | dono remove o próprio; supervisor remove qualquer um da própria cozinha |
+
+Aceitos: PDF (com texto), `.docx`, `.xlsx`, `.pptx`, `.csv`, `.txt`, `.md`, `.png`, `.jpg`, `.webp`.
+
+**Segurança (nada é gravado em disco nem executado)**, em `iai/app/core/arquivos/`:
+
+1. `seguranca.py`: lista de permitidos por extensão; recusa executáveis/scripts (`.exe`, `.dll`, `.bat`, `.ps1`, `.js`...),
+   compactados (`.zip`, `.rar`, `.7z`...), macros (`.docm`, `.xlsm`...), HTML/SVG, Office antigo e dupla extensão
+   (`fatura.exe.pdf`). Confere a **assinatura real** do conteúdo (um `.exe` renomeado para `.pdf` é barrado).
+   PDF sem JavaScript/Launch/anexos/ações automáticas/senha; OOXML sem macro, objeto OLE/ActiveX, vínculo externo,
+   DOCTYPE/ENTITY e zip bomb; imagem decodificada e **reencodada** (remove metadados e payloads escondidos).
+2. `extracao.py`: texto oculto (`vanish`, abas ocultas, caracteres invisíveis/tag characters) é descartado.
+3. `guardrail.py`: prompt injection indireta — regras determinísticas + classificador LLM (Gemini, com Groq de reserva),
+   fail-closed (erro do classificador = arquivo recusado). Senhas/chaves são mascaradas antes de qualquer envio.
+   Só depois de aprovado o arquivo vai para o Qdrant.
+4. `descricao_imagem.py`: agente de visão (Gemini) descreve tudo da imagem; ordens escritas na imagem a recusam.
+5. Na leitura, `buscar_documentos` filtra por cozinha/usuário no Qdrant, descarta trechos suspeitos e entrega o
+   conteúdo ao modelo marcado como dado de terceiros.
+
+Qdrant: uma coleção (`inventra_documentos`) com o campo `tipo` no payload (um índice para todos os formatos, filtrável
+por `tipo`) e índices em `kitchen_id`, `user_id`, `arquivo_id`, `tipo`, `compartilhado` e `ordem`. Cada arquivo vira
+trechos de ~1000 caracteres (150 de sobreposição; tabelas repetem o cabeçalho). Reenviar o mesmo arquivo substitui o anterior.
+
+Limites conhecidos: não há antivírus por assinatura de malware (é lista de permitidos + validação estrutural);
+PDF escaneado sem texto é recusado (envie como imagem); `.doc/.xls/.ppt` antigos e arquivos compactados são recusados.
+
 ## Human in the loop (a implementar)
 
 O fluxo antigo de aprovação (coleção `approvals`, rotas `/approvals`, decisão, execução,
@@ -226,6 +260,10 @@ a demonstração offline. Não publique o arquivo `.env` local.
 | TYPESAFE_API_KEY | TypeSafe/JEV para autorizar tools dos agentes live; falha bloqueia execução |
 | JEV_ESCOPO | `escrita` (padrão): o JEV julga só `propor_*`; `todas`: julga qualquer tool |
 | JEV_MODEL / JEV_APPROVAL_THRESHOLD / JEV_TIMEOUT | versão `jev-1.13.0`, limiar 0.70, timeout 10 s |
+| QDRANT_URL / QDRANT_API_KEY | cluster do Qdrant Cloud para os documentos; sem eles `/arquivos` responde 503 e a IA segue normal |
+| QDRANT_COLLECTION / EMBEDDING_MODEL / EMBEDDING_DIM | coleção (`inventra_documentos`), embedding Gemini (`gemini-embedding-001`) e dimensão (768); mudar a dimensão exige outra coleção |
+| ARQUIVOS_MAX_BYTES / ARQUIVOS_MAX_POR_ENVIO / ARQUIVOS_MAX_POR_USUARIO / ARQUIVOS_MAX_CARACTERES | limites (10 MB, 10 arquivos por envio, 50 por usuário, 120 mil caracteres indexados por arquivo) |
+| ARQUIVOS_GUARDRAIL_LLM | `on` (padrão) ou `off`: classificador LLM de prompt injection nos arquivos |
 | CORS_ORIGINS | origens exatas do frontend, separadas por vírgula (padrão `http://localhost:3000,http://localhost:5173`) |
 | METRICAS_REQ_USUARIO_SEMANA / METRICAS_VALOR_RESOLUCAO_USD | premissas do `/metrics` (padrão 10 e 1.50) |
 
