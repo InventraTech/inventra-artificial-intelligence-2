@@ -1,12 +1,12 @@
 # IAI INVENTRA
 
 FastAPI + LangChain + LangGraph para conhecimento documental, consultas operacionais e
-propostas de alteração aprovadas por Supervisor. Esta branch não altera Spring nem frontend.
+propostas de alteração confirmadas pelo próprio solicitante autenticado. Esta branch não altera Spring nem frontend.
 
 Para compreender a arquitetura, as regras essenciais e os limites reais antes de trabalhar no código,
-consulte [Contexto da IAI para outras IAs](CONTEXTO_IAI_PARA_IAS.md).
+consulte [Contexto da IAI para outras IAs](CONTEXTO_TECNICO_IA_ATUAL.md).
 
-O chat **live** usa o [gate JEV pré-execução de tools](docs/JEV_GATE.md).
+O chat **live** usa o [gate JEV pré-execução de tools](iai/app/core/assistant/tool_gate.py).
 Cada chamada é registrada e julgada antes de executar; isso não substitui a aprovação
 humana das alterações de negócio. Configure `TYPESAFE_API_KEY` para esse fluxo.
 O demo determinístico continua disponível sem JEV real.
@@ -73,7 +73,7 @@ Não exponha os modos mock publicamente.
 
 ## Chat e consultas
 
-`POST /chat` preserva `session_id`, `user_id`, `pergunta` e resposta `{"resposta": "..."}`.
+`POST /chat` preserva `session_id`, `user_id`, `pergunta` e o campo `resposta`. A resposta agora inclui `artifacts` (zero ou um elemento) e `pending_actions` (ações persistidas para revisão).
 O `user_id` deve corresponder à identidade autenticada. `request_id` opcional pode ser
 reutilizado pelo frontend ao repetir a mesma requisição; é a chave da rodada para propostas.
 
@@ -94,12 +94,46 @@ continuar simulados enquanto se valida o provedor real.
 `POST /chat/audio` (multipart: `session_id`, `user_id`, `request_id` opcional e o arquivo
 `audio` em webm, ogg, mp3, m4a, mp4 ou wav, até 10 MB) transcreve a fala com Whisper
 (`whisper-large-v3-turbo`, Groq) e segue o mesmo fluxo e a mesma autenticação do `/chat`.
-Responde `{"transcricao": "...", "resposta": "..."}`. Exige `GROQ_API_KEY`; o áudio não é
+Responde com `transcricao`, `resposta`, `artifacts` e `pending_actions`. Exige `GROQ_API_KEY`; o áudio não é
 gravado, só o texto transcrito entra no histórico.
 
 `POST /queries` oferece as mesmas consultas tipadas sem depender de LLM.
 Exemplo: `{"resource":"validade","days":7}`.
 `GET /queries/capabilities` informa schemas, operações e limitações.
+
+## Artefatos e leituras paralelas
+
+O backend não renderiza gráficos nem gera HTML. `artifacts` contém no máximo uma tabela
+(`type=table`, `columns`, `rows`) ou gráfico (`type=chart`, `chart_type=bar|pie`, `labels`,
+`datasets`, `unit`). Ambos identificam `source` e `mocked`. O modelo escolhe somente formato/fonte;
+os dados são projetados dos resultados de ferramentas autorizadas desta rodada. Não há estatísticas
+sobre páginas incompletas nem comparação de quantidades com unidades incompatíveis. Pizza usa
+contagem de registros por status/categoria. Vendas e comparação entre cozinhas não são suportadas.
+
+Exemplos no demo: "Compare as quantidades em estoque em barras"; "Mostre os lotes próximos do
+vencimento com produto validade e quantidade". Consultas escalares e conceitos continuam em texto.
+A seleção live usa saída estruturada do modelo rápido; o demo usa regras limitadas e não chama LLM.
+O histórico continua textual; os artefatos não são persistidos como visualizações recuperáveis.
+
+Leituras independentes de `consultar_inventra`, `faq_retriever` e `buscar_historico` podem ser emitidas
+no mesmo lote e executadas com concorrência máxima de quatro. O `ToolNode` faz fan-in antes de
+retomar o especialista. Cada chamada live continua passando individualmente pelo JEV. Evidências
+são uma fotografia anterior ao lote, e permissões de uso único permanecem isoladas por contexto.
+Lotes com proposta são processados uma etapa por vez; criação, confirmação e execução são sequenciais.
+Falhas de fontes complementares podem produzir resposta parcial, sem executar a chamada rejeitada.
+
+`pending_actions` é separado dos artefatos visuais e contém ID, hash, operação, parâmetros,
+justificativa, estado, prazo e snapshot dos alvos. Confirme com o próprio usuário autenticado:
+
+```http
+POST /approvals/{id}/decision
+Authorization: Bearer <token atual do solicitante>
+Content-Type: application/json
+```
+
+```json
+{"decision":"approve","proposal_hash":"<hash retornado na proposta>"}
+```
 
 ## Tools por agente
 
@@ -182,8 +216,8 @@ não executam) e confira os logs em View → Output → MCP Logs. Não coloque o
 ## Aprovação
 
 1. Proposta criada por ferramenta do agente ou `POST /approvals`.
-2. Supervisor vê `GET /approvals/inbox`, restrito à sua cozinha.
-3. Envia `POST /approvals/{id}/decision` com decisão e hash da proposta.
+2. O próprio solicitante vê `GET /approvals/inbox`, restrito às suas pendências na cozinha autenticada.
+3. O solicitante envia `POST /approvals/{id}/decision` com Bearer atual, decisão e hash da proposta.
 4. Execução única quando disponível. Resultado mock continua explicitamente identificado.
 5. Solicitante acompanha `GET /approvals/{id}` ou listagem de suas solicitações.
 
@@ -193,7 +227,7 @@ requisições e fornecedores; supervisor → tudo, inclusive produtos. O mapa fi
 `ROLE_OPERATIONS` (`domain.py`) e aparece em `GET /queries/capabilities` (`allowed_roles`).
 A API Spring continua aplicando as próprias permissões na execução.
 
-Prazo: 7 dias. Autoaprovação de Supervisor da mesma cozinha é permitida.
+Prazo: 7 dias. Somente o solicitante confirma/rejeita; Supervisor não confirma ações alheias. Perfil atual, cozinha, hash e snapshot são revalidados. Decisões legadas de terceiros não autorizam nova execução.
 Nenhuma tool do modelo aprova ou executa. Não há exclusão física pela IAI.
 Operações em itens/lotes distintos são propostas independentes, sem atomicidade de grupo.
 
@@ -229,10 +263,10 @@ API real não aceita identidade mock. JWT é validado por `GET /api/users/me`, s
 decodificação não verificada e sem segredo de assinatura compartilhado. Tokens permanecem
 apenas no contexto HTTP; não são colocados em prompts, checkpoints ou histórico.
 
-A execução real como outro solicitante depende de delegação ainda ausente no Spring.
-A aprovação permanece `APROVADA_PENDENTE_INTEGRACAO`. O solicitante pode apresentar
-JWT fresco em `POST /approvals/{id}/execute`; a API volta a aplicar suas permissões.
-Edição de contagem e remoção lógica de item também têm dependências externas.
+A confirmação usa a identidade do próprio solicitante e seu JWT fresco, sem delegação de outro usuário.
+A decisão tenta executar imediatamente; `POST /approvals/{id}/execute` permite retomar uma aprovação
+válida após indisponibilidade anterior ao envio. A API Spring volta a aplicar suas permissões.
+Edição de contagem e remoção lógica de item ainda têm dependências externas.
 Não inventamos endpoints para essas capacidades.
 
 Uma falha após iniciar envio pode ser `RESULTADO_INCERTO`. A IAI não repete a escrita.
@@ -240,6 +274,11 @@ Reconciliação/idempotência completa entre serviços depende do backend.
 A página de aprovação está em outro repositório e não foi criada aqui.
 
 ## Testes
+
+Validação local de 26/10/2026 após artefatos, HITL do solicitante e fan-out:
+**248 testes aprovados, 6 ignorados; cobertura de 91,42%** (baseline anterior: 90,34%).
+Ruff e mypy passaram. Testes externos permaneceram desativados; o teste de retomada
+Mongo entre processos é opt-in e não foi executado nesta validação.
 
 ```powershell
 .\.venv\Scripts\python.exe -m pip install -r requirements-dev.txt
@@ -254,7 +293,8 @@ Testes opcionais, somente com serviços explicitamente disponibilizados:
 
 - `RUN_LLM_TESTS=1` e chaves reais: FAQ pelos provedores, negócio/Mongo continuam mockados.
 - `RUN_MONGO_TESTS=1` e `MONGO_TEST_CONNECTION`: persistência e decisão atômica em base
-  temporária exclusiva `iai_test_<uuid>`; não usa `dbIAI`.
+  temporária exclusiva `iai_test_<uuid>`, incluindo preparação e confirmação em processos
+  separados; não usa `dbIAI`.
 - `RUN_SPRING_TESTS=1` e `SPRING_TEST_TOKEN`: leitura de identidade/catálogo real, sem escrita.
 - `RUN_JEV_TESTS=1` e `TYPESAFE_API_KEY`: contrato real de decisões TypeSafe, sem executar tools de negócio.
 

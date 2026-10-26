@@ -157,7 +157,7 @@ def proposal_tool(operation):
     return StructuredTool.from_function(
         prepare,
         name=f"propor_{operation.value}",
-        description=f"Prepara {operation.value} para aprovação. NÃO EXECUTA. Confirme IDs/dados; nunca invente.",
+        description=f"Prepara {operation.value} para revisão e confirmação do próprio solicitante. NÃO EXECUTA. Confirme IDs/dados; nunca invente.",
         args_schema=schema,
     )
 

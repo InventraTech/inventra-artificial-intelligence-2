@@ -10,7 +10,7 @@ from pymongo import ReturnDocument
 from pymongo.errors import DuplicateKeyError
 
 from iai.app.core.config import BUSINESS_MODE, business_date
-from iai.app.core.infra.security import RequestContext, require_supervisor
+from iai.app.core.infra.security import RequestContext
 from iai.app.core.infra.storage import get_db
 from iai.app.core.inventra.business import gateway
 from iai.app.core.inventra.domain import (
@@ -199,7 +199,8 @@ def create_proposal(payload: ProposalInput, ctx: RequestContext):
         "execution_error": None,
         "technical_executor": "iai",
         "business_mode": BUSINESS_MODE,
-        "notification": {"channel": "supervisor_inbox", "available": True},
+        "confirmation_policy": "requester",
+        "notification": {"channel": "requester_inbox", "available": True},
         "audit": [
             {"event": "PROPOSTA_CRIADA", "at": created, "actor": owner["user_id"]}
         ],
@@ -259,10 +260,10 @@ def get_proposal(identifier, ctx):
     return doc
 
 
-def list_proposals(ctx, status=None, offset=0, limit=20):
+def list_proposals(ctx, status=None, offset=0, limit=20, *, mine=False):
     expire_pending()
     query = {"kitchen_id": ctx.identity.kitchen_id}
-    if ctx.identity.role != "SUPERVISOR":
+    if mine or ctx.identity.role != "SUPERVISOR":
         query["requester_id"] = ctx.identity.user_id
     if status:
         query["status"] = status
@@ -276,9 +277,9 @@ def list_proposals(ctx, status=None, offset=0, limit=20):
 
 
 def decide(identifier: str, payload: DecisionInput, ctx: RequestContext):
-    require_supervisor(ctx)
     col = get_db().approvals
     doc = get_proposal(identifier, ctx)
+    require_requester(doc, ctx)
     if payload.proposal_hash != doc["proposal_hash"]:
         raise HTTPException(409, "A decisão não corresponde à proposta imutável.")
     immutable = {k: doc[k] for k in ("action", "requester", "before", "justification")}
@@ -326,10 +327,15 @@ def decide(identifier: str, payload: DecisionInput, ctx: RequestContext):
 def execute_approved(identifier, ctx):
     col = get_db().approvals
     doc = get_proposal(identifier, ctx)
+    require_requester(doc, ctx)
     if doc["status"] in TERMINAL or doc["status"] == "EM_EXECUCAO":
         return public(doc)
     if doc["status"] != "APROVADA_PENDENTE_INTEGRACAO":
         raise HTTPException(409, "A operação ainda não foi aprovada.")
+    if doc.get("decided_by") != doc["requester_id"]:
+        raise HTTPException(
+            409, "Decisão legada de terceiro não confirma a ação. Crie nova proposta."
+        )
     immutable = {k: doc[k] for k in ("action", "requester", "before", "justification")}
     if digest(immutable) != doc["proposal_hash"]:
         raise HTTPException(
@@ -345,24 +351,19 @@ def execute_approved(identifier, ctx):
             },
         )
         return public(col.find_one({"_id": identifier}))
-    if BUSINESS_MODE == "spring" and (
-        ctx.identity.user_id != doc["requester_id"]
-        or doc["action"]["operation"] in {Operation.EDIT_COUNT, Operation.REMOVE_ITEM}
-    ):
+    if BUSINESS_MODE == "spring" and doc["action"]["operation"] in {
+        Operation.EDIT_COUNT,
+        Operation.REMOVE_ITEM,
+    }:
         col.update_one(
             {"_id": identifier, "status": doc["status"]},
             {
                 "$set": {
-                    "execution_error": "INTEGRACAO_PENDENTE: delegação, edição de contagem ou remoção lógica de item não disponível."
+                    "execution_error": "INTEGRACAO_PENDENTE: edição de contagem ou remoção lógica de item não disponível."
                 }
             },
         )
         return public(col.find_one({"_id": identifier}))
-    if (
-        ctx.identity.role != "SUPERVISOR"
-        and ctx.identity.user_id != doc["requester_id"]
-    ):
-        raise HTTPException(403, "Execução fora do escopo autorizado.")
     action = Action.model_validate(doc["action"])
     # Os dados aprovados não mudam. Alvo alterado exige nova proposta/decisão.
     try:
@@ -438,3 +439,18 @@ def execute_approved(identifier, ctx):
         },
     )
     return public(col.find_one({"_id": identifier}))
+
+
+def require_requester(doc, ctx):
+    """Identidade e permissões atuais, inclusive em decisões/execuções repetidas."""
+    if (
+        doc["requester_id"] != ctx.identity.user_id
+        or doc["kitchen_id"] != ctx.identity.kitchen_id
+    ):
+        raise HTTPException(
+            403, "Somente o solicitante pode confirmar ou executar esta ação."
+        )
+    if Operation(doc["action"]["operation"]) not in ROLE_OPERATIONS.get(
+        ctx.identity.role, set()
+    ):
+        raise HTTPException(403, "Seu perfil atual não permite esta operação.")

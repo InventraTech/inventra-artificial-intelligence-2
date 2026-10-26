@@ -18,7 +18,9 @@ def cliente_falso(texto):
 
 
 def test_transcreve_e_remove_espacos(monkeypatch):
-    monkeypatch.setattr(audio, "cliente", lambda: cliente_falso("  usei 2 kg de arroz "))
+    monkeypatch.setattr(
+        audio, "cliente", lambda: cliente_falso("  usei 2 kg de arroz ")
+    )
     assert audio.transcrever_audio(b"x", "voz.webm") == "usei 2 kg de arroz"
 
 
@@ -63,17 +65,19 @@ def test_rota_transcreve_e_usa_o_fluxo_do_chat(monkeypatch):
     )
 
     def fluxo(pergunta_usuario, session_id, user_id):
-        assert context().identity.user_id == user_id == "demo-estoquista"
-        return f"ok:{pergunta_usuario}"
+        from iai.app.core.schemas import ChatResponse
 
-    monkeypatch.setattr(graph, "executar_fluxo_assessor", fluxo)
-    resposta = post_audio(
-        TestClient(app), {"Authorization": "Bearer demo-estoquista"}
-    )
+        assert context().identity.user_id == user_id == "demo-estoquista"
+        return ChatResponse(resposta=f"ok:{pergunta_usuario}")
+
+    monkeypatch.setattr(graph, "executar_fluxo_chat", fluxo)
+    resposta = post_audio(TestClient(app), {"Authorization": "Bearer demo-estoquista"})
     assert resposta.status_code == 200
     assert resposta.json() == {
         "transcricao": "quanto tenho de arroz",
         "resposta": "ok:quanto tenho de arroz",
+        "artifacts": [],
+        "pending_actions": [],
     }
 
 

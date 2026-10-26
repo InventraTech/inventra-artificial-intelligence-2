@@ -49,6 +49,7 @@ def capabilities(ctx: Authenticated):
             for operation in Operation
         ],
         "approval_days": 7,
+        "confirmation_actor": "requester",
         "physical_delete": False,
     }
 

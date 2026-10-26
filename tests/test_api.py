@@ -41,14 +41,14 @@ def test_end_to_end_proposal_inbox_decision_and_history(client):
     assert response.status_code == 200
     assert "AGUARDANDO_APROVACAO" in response.json()["resposta"]
     assert "MOCK" in response.json()["resposta"]
-    pending = client.get("/approvals/inbox", headers=auth("demo-supervisor")).json()[
+    pending = client.get("/approvals/inbox", headers=auth()).json()[
         "items"
     ]
     assert len(pending) == 2
     for p in pending:
         response = client.post(
             f"/approvals/{p['id']}/decision",
-            headers=auth("demo-supervisor"),
+            headers=auth(),
             json={"decision": "approve", "proposal_hash": p["proposal_hash"]},
         )
         assert response.json()["status"] == "CONCLUIDA"

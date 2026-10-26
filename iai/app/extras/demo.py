@@ -6,8 +6,9 @@ fluxo de aprovação offline; não é apresentada como capacidade geral de lingu
 
 import re
 
-from langchain_core.messages import ToolMessage
+from langchain_core.messages import AIMessage, ToolMessage
 from langgraph.graph import END, StateGraph
+from langgraph.prebuilt import ToolNode
 
 from iai.app.core.assistant.guardrail import verificar
 from iai.app.core.infra.retrieval import normalize
@@ -16,7 +17,81 @@ from iai.app.core.inventra.business import gateway
 from iai.app.core.inventra.domain import Operation, Query
 from iai.app.core.schemas import Estado
 from iai.app.core.tools.faq import faq_retriever
-from iai.app.core.tools.operational import PROPOSAL_TOOLS
+from iai.app.core.tools.memoria import buscar_historico
+from iai.app.core.tools.operational import PROPOSAL_TOOLS, consultar_inventra
+
+
+def plan_demo_reads(text):
+    """Plano determinístico limitado. Só lotes de leituras já independentes."""
+    normalized = normalize(text)
+    resources = []
+    if any(t in normalized for t in ("abaixo", "minimo", "em falta")):
+        resources.append("estoque_minimo")
+    elif "estoque" in normalized or "quanto" in normalized:
+        resources.append("estoque")
+    for terms, resource in [
+        (("venc", "validade"), "validade"),
+        (("requis", "pedido"), "requisicoes"),
+        (("fornecedor",), "fornecedores"),
+        (("inventario",), "inventarios"),
+        (("alerta",), "alertas"),
+        (("lote",), "lotes"),
+    ]:
+        if any(t in normalized for t in terms):
+            if resource == "lotes" and "validade" in resources:
+                continue
+            resources.append(resource)
+    if "fornecedores" in resources and "recorrent" in normalized:
+        resources[resources.index("fornecedores")] = "fornecedores_recorrentes"
+    conceptual = normalized.startswith(("como ", "o que e ", "quem pode")) and not any(
+        t in normalized
+        for t in (
+            " e ",
+            "tambem",
+            "compare",
+            "mostre",
+            "distribui",
+            "grafico",
+            "tabela",
+        )
+    )
+    calls = []
+    if not conceptual:
+        days = re.search(r"(\d+)\s*dias", normalized)
+        for resource in dict.fromkeys(resources):
+            query = Query(
+                resource=resource,
+                days=int(days[1]) if days else 7,
+                status="UNDER_REVIEW"
+                if resource == "requisicoes" and "pendent" in normalized
+                else None,
+            )
+            calls.append(
+                {
+                    "name": "consultar_inventra",
+                    "args": query.model_dump(mode="json", exclude_none=True),
+                }
+            )
+    if (
+        conceptual
+        or not calls
+        or any(t in normalized for t in ("explique", "como funciona", "regra"))
+    ):
+        calls.append({"name": "faq_retriever", "args": {"question": text}})
+    if any(t in normalized for t in ("conversa anterior", "falamos", "conversamos")):
+        if not resources:
+            calls = []
+        calls.append({"name": "buscar_historico", "args": {"busca": ""}})
+    return [dict(c, id=f"demo-read-{i}") for i, c in enumerate(calls)]
+
+
+read_graph = StateGraph(Estado)
+read_graph.add_node(
+    "tools", ToolNode([consultar_inventra, faq_retriever, buscar_historico])
+)
+read_graph.set_entry_point("tools")
+read_graph.add_edge("tools", END)
+demo_reads = read_graph.compile()
 
 
 def demo_node(state):
@@ -28,6 +103,23 @@ def demo_node(state):
             "agentes_chamados": ["demo:filtro_hardcoded"],
         }
     normalized = normalize(text)
+    from iai.app.core.assistant.artifacts import (
+        KITCHEN_MESSAGE,
+        SALES_MESSAGE,
+        unsupported_kitchens,
+        unsupported_sales,
+    )
+
+    if unsupported_sales(text):
+        return {
+            "messages": [AIMessage(content=SALES_MESSAGE)],
+            "agentes_chamados": ["demo:dominio_indisponivel"],
+        }
+    if unsupported_kitchens(text):
+        return {
+            "messages": [AIMessage(content=KITCHEN_MESSAGE)],
+            "agentes_chamados": ["demo:escopo_cozinha"],
+        }
     for word, value in {
         "dez": "10",
         "quarenta": "40",
@@ -101,42 +193,17 @@ def demo_node(state):
             "messages": messages,
             "agentes_chamados": ["demo:estoquista", "demo:propostas"],
         }
-    resource = None
-    if any(term in normalized for term in ["abaixo", "minimo", "em falta"]):
-        resource = "estoque_minimo"
-    elif any(term in normalized for term in ["venc", "validade"]):
-        resource = "validade"
-    elif "requis" in normalized or "pedido" in normalized:
-        resource = "requisicoes"
-    elif "fornecedor" in normalized:
-        resource = (
-            "fornecedores_recorrentes" if "recorrent" in normalized else "fornecedores"
-        )
-    elif "produto" in normalized:
-        resource = "produtos"
-    elif "inventario" in normalized:
-        resource = "inventarios"
-    elif "alerta" in normalized:
-        resource = "alertas"
-    elif "lote" in normalized:
-        resource = "lotes"
-    if resource and not any(
-        term in normalized for term in ["como ", "o que e ", "quem pode"]
-    ):
-        found_days = re.search(r"(\d+)\s*dias", normalized)
-        q = Query(
-            resource=resource,
-            days=int(found_days[1]) if found_days else 7,
-            status="UNDER_REVIEW"
-            if resource == "requisicoes" and "pendent" in normalized
-            else None,
-        )
-        outcome = gateway().query(q, context())
-        answer = outcome.model_dump_json()
-    else:
-        answer = faq_retriever.invoke(text)
+    planned = AIMessage(content="", tool_calls=plan_demo_reads(text))
+    outcomes = [
+        m
+        for m in demo_reads.invoke(
+            {"messages": [planned]}, config={"max_concurrency": 4}
+        )["messages"]
+        if m.type == "tool"
+    ]
+    answer = "\n\n".join(f"{m.name}: {m.content}" for m in outcomes)
     return {
-        "messages": [{"role": "assistant", "content": answer}],
+        "messages": [planned, *outcomes, AIMessage(content=answer)],
         "agentes_chamados": ["demo:consulta_ou_faq"],
     }
 

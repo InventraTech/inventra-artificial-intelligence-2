@@ -40,7 +40,7 @@ def approved(operation, parameters):
     return decide(
         p["id"],
         DecisionInput(decision="approve", proposal_hash=p["proposal_hash"]),
-        context_for("demo-supervisor"),
+        context_for(requester),
     )
 
 

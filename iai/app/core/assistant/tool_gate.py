@@ -41,6 +41,7 @@ from iai.app.core.inventra.domain import ROLE_OPERATIONS, Operation
 logger = logging.getLogger(__name__)
 SAFE_STOP = "Não consegui confirmar os dados para concluir esse pedido. Essa etapa não foi realizada; reformule o pedido para continuar."
 UNAVAILABLE = "A consulta está temporariamente indisponível. Essa etapa não foi realizada; tente novamente mais tarde."
+PARALLEL_READS = frozenset({"consultar_inventra", "faq_retriever", "buscar_historico"})
 FIELD_LABELS = {
     "quantity": "a quantidade e a unidade do produto",
     "newQuantity": "a quantidade final desejada e sua unidade",
@@ -70,6 +71,8 @@ class GateState(AgentState, total=False):  # type: ignore[call-arg]  # AgentStat
     jev_attempt: int
     jev_halt: str | None
     jev_stops: Annotated[list[str], operator.add]
+    jev_parallel: bool
+    jev_evidence: list[dict]
 
 
 class ToolCandidate(BaseModel):
@@ -228,14 +231,22 @@ class JevToolGate(AgentMiddleware):
 
     @hook_config(can_jump_to=["end"])
     def before_model(self, state, runtime):
-        stop = state.get("jev_halt") or next(iter(state.get("jev_stops", [])), None)
+        batch = last_batch(state)
+        # Somente indisponibilidade de uma leitura complementar admite síntese parcial.
+        partial = (
+            state.get("jev_parallel")
+            and any(c["status"] == "EXECUTED" for c in batch)
+            and all(not c.get("halt") or c.get("error_type") for c in batch)
+        )
+        stop = state.get("jev_halt") or (
+            None if partial else next((c["halt"] for c in batch if c.get("halt")), None)
+        )
         if stop:
             return {
                 "messages": [AIMessage(content=stop)],
                 "jev_halt": stop,
                 "jump_to": "end",
             }
-        batch = last_batch(state)
         if any(c["status"] == "RETRY_SPECIALIST" for c in batch):
             return {"jev_attempt": max(c["attempt"] for c in batch) + 1}
         if batch:
@@ -255,6 +266,20 @@ class JevToolGate(AgentMiddleware):
                 }
             return None
         identity = context().identity
+        # Propostas e leituras que as preparam são etapas sequenciais. Não executar
+        # chamadas posteriores de um lote misto com IDs ainda não confirmados.
+        sequential = len(calls) > 1 and any(
+            c["name"].startswith("propor_") for c in calls
+        )
+        if sequential:
+            calls = calls[:1]
+        parallel = len(calls) > 1 and all(c["name"] in PARALLEL_READS for c in calls)
+        scope = scope_var.get()
+        if scope:
+            with scope.lock:
+                prior_evidence = list(scope.evidence[-6:])
+        else:
+            prior_evidence = []
         records = {}
         for call in calls:
             key = str(uuid4())
@@ -275,17 +300,26 @@ class JevToolGate(AgentMiddleware):
                 "created_at": datetime.now(UTC).isoformat(),
             }
             records[key] = ToolCandidate.model_validate(record).model_dump(mode="json")
-        return {
+        update = {
             "jev_calls": records,
             "jev_batch": list(records),
+            "jev_parallel": parallel,
+            "jev_evidence": prior_evidence,
             "jev_events": [
                 event(r, "tool_candidate_created") for r in records.values()
             ],
         }
+        if sequential:
+            update["messages"] = [message.model_copy(update={"tool_calls": calls})]
+        return update
 
     def wrap_tool_call(self, request, handler):
-        # Mesmo um lote emitido em paralelo é avaliado/executado em ordem no turno.
         scope = scope_var.get() or LiveScope()
+        if (
+            request.state.get("jev_parallel")
+            and request.tool_call["name"] in PARALLEL_READS
+        ):
+            return self._guard(request, handler, scope)
         with scope.lock:
             return self._guard(request, handler, scope)
 
@@ -360,13 +394,13 @@ class JevToolGate(AgentMiddleware):
                             "schema": tool.tool_call_schema.model_json_schema(),
                             "arguments": call["args"],
                         },
-                        "evidence": evidence + scope.evidence[-6:],
+                        "evidence": evidence + request.state.get("jev_evidence", []),
                         "allowed_tools": list(self.allowed),
                         "role": context().identity.role,
                         "business_date": business_date().isoformat(),
                         "rules": [
                             "Reads do not change business data.",
-                            "propor_* only registers a proposal; human supervisor approval is still mandatory.",
+                            "propor_* only registers a proposal; confirmation by the same authenticated requester is mandatory before business execution.",
                             "IDs must come from authorized lookup or explicit user input; never ask users for internal IDs.",
                             "No physical deletion or cross-kitchen access. History is not current stock.",
                             "Default query options from the schema are allowed. Factual arguments cannot be invented.",
@@ -409,8 +443,11 @@ class JevToolGate(AgentMiddleware):
             permit = permit_var.set(
                 {"fingerprint": fingerprint(tool.name, args), "used": False}
             )
-            scope.executed.add(record["id"])
             try:
+                with scope.lock:
+                    if record["id"] in scope.executed:
+                        raise PermissionError("Candidato já executado.")
+                    scope.executed.add(record["id"])
                 events.append(event(record, "tool_execution_started"))
                 result = handler(request)
                 if not isinstance(result, ToolMessage):
@@ -422,9 +459,11 @@ class JevToolGate(AgentMiddleware):
                         record["status"] = "FAILED"
                 except (ValueError, TypeError):
                     pass  # FAQ/histórico também devolvem texto, sem contrato JSON.
-                scope.evidence.append(
-                    sanitized({"tool": tool.name, "result": result.content})
+                evidence_result = sanitized(
+                    {"tool": tool.name, "result": result.content}
                 )
+                with scope.lock:
+                    scope.evidence.append(evidence_result)
             except Exception as exc:  # noqa: BLE001 - não repetir resultado potencialmente incerto
                 record["status"] = "FAILED"
                 record["error_type"] = type(exc).__name__
@@ -461,6 +500,10 @@ class JevToolGate(AgentMiddleware):
             else:
                 events.append(event(record, "tool_retry"))
         record["finished_at"] = datetime.now(UTC).isoformat()
+        if halt:
+            record["halt"] = halt
+        # Mantém a origem também em erros interceptados antes do executor.
+        result.name = tool.name if tool else record["tool"]
         update = {
             "messages": [result],
             "jev_calls": {record["id"]: record},

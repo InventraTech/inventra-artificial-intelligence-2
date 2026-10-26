@@ -35,7 +35,7 @@ from iai.app.core.assistant.tool_gate import JevToolGate, live_tool_scope
 from iai.app.core.config import BUSINESS_MODE, LLM_MODE
 from iai.app.core.infra.metrics import ColetorMetricas, registrar_requisicao
 from iai.app.core.infra.security import context
-from iai.app.core.schemas import Estado
+from iai.app.core.schemas import ChatResponse, Estado, PendingAction
 from iai.app.core.tools.faq import faq_retriever
 from iai.app.core.tools.memoria import TOOLS_MEMORIA
 from iai.app.core.tools.operational import BUY_TOOLS, STOCK_TOOLS, SUPERVISOR_TOOLS
@@ -204,6 +204,23 @@ def gate_updates(state, response, agent):
 
 
 def no_roteador(estado: Estado, config: RunnableConfig) -> dict:
+    from iai.app.core.assistant.artifacts import (
+        KITCHEN_MESSAGE,
+        SALES_MESSAGE,
+        unsupported_kitchens,
+        unsupported_sales,
+    )
+
+    if unsupported_sales(extrair_texto(estado["messages"][-1])):
+        return {
+            "rota": "fim",
+            "messages": [{"role": "assistant", "content": SALES_MESSAGE}],
+        }
+    if unsupported_kitchens(extrair_texto(estado["messages"][-1])):
+        return {
+            "rota": "fim",
+            "messages": [{"role": "assistant", "content": KITCHEN_MESSAGE}],
+        }
     saida = router_app.invoke({"messages": list(estado["messages"])}, config=config)
 
     updates = gate_updates(estado, saida, "roteador")
@@ -383,6 +400,13 @@ fluxo_agentes = grafo.compile()  # histórico reidratado do Mongo a cada rodada
 def executar_fluxo_assessor(
     pergunta_usuario: str, session_id: str, user_id: str = "user_test"
 ) -> str:
+    """Compatibilidade para consumidores internos que precisam apenas do texto."""
+    return executar_fluxo_chat(pergunta_usuario, session_id, user_id).resposta
+
+
+def executar_fluxo_chat(
+    pergunta_usuario: str, session_id: str, user_id: str = "user_test"
+) -> ChatResponse:
     import json
 
     from fastapi import HTTPException
@@ -443,7 +467,7 @@ def executar_fluxo_assessor(
                             "kitchen_id": k,
                         },
                         "recursion_limit": 80,
-                        "max_concurrency": 1,
+                        "max_concurrency": 4,
                         "callbacks": [coletor],
                         "run_name": "iai_chat",
                         "tags": ["iai"],
@@ -484,6 +508,43 @@ def executar_fluxo_assessor(
             response += "\nSomente as propostas listadas foram registradas; outros itens ou dados ainda não confirmados não foram propostos."
             if output.get("jev_halt"):
                 response += "\n" + output["jev_halt"]
+        artifacts = []
+        pending_actions = []
+        if proposals:
+            # Usa a proposta persistida, nunca parâmetros reescritos pelo modelo.
+            pending_actions = [
+                PendingAction(
+                    id=p["id"],
+                    proposal_hash=p["proposal_hash"],
+                    operation=p["action"]["operation"],
+                    parameters=p["action"]["parameters"],
+                    justification=p["justification"],
+                    status=p["status"],
+                    expires_at=p["expires_at"],
+                    before=p["before"],
+                )
+                for p in reversed(proposals)
+            ]
+            response += "\nRevise os parâmetros acima e confirme ou rejeite cada ação. A alteração só será executada após sua confirmação e a revalidação dos dados."
+        elif not output.get("jev_halt"):
+            from iai.app.core.assistant.artifacts import present
+
+            anonymous_question, _ = anonimizar_entrada(pergunta_usuario)
+            artifacts, description = present(
+                anonymous_question,
+                output["messages"],
+                demo=LLM_MODE == "demo",
+                jev_calls=output.get("jev_calls", {}) if LLM_MODE == "live" else None,
+                config={"callbacks": [coletor]},
+            )
+            if artifacts:
+                response = description
+            elif description:
+                response += "\n" + description
+        if tool_failures and not proposals:
+            response += "\nFontes/etapas indisponíveis:\n" + "\n".join(
+                reversed(tool_failures)
+            )
         if BUSINESS_MODE == "mock":
             response = "[DADOS OPERACIONAIS MOCK — demonstração]\n" + response
         if LLM_MODE == "demo":
@@ -494,7 +555,9 @@ def executar_fluxo_assessor(
         anonymous, _ = anonimizar_entrada(pergunta_usuario)
         salvar_mensagem(session_id, "human", anonymous, user_id=user_id, kitchen_id=k)
         salvar_mensagem(session_id, "iai", response, user_id=user_id, kitchen_id=k)
-        return response
+        return ChatResponse(
+            resposta=response, artifacts=artifacts, pending_actions=pending_actions
+        )
     except (HTTPException, PyMongoError) as exc:
         status = "erro"
         error_type = type(exc).__name__

@@ -29,14 +29,14 @@ router = APIRouter(tags=["chat"])
 
 def executar_no_contexto(
     ctx, pergunta: str, session_id: str, request_id: str | None = None
-) -> str:
-    from iai.app.core.assistant.graph import executar_fluxo_assessor
+) -> ChatResponse:
+    from iai.app.core.assistant.graph import executar_fluxo_chat
 
     marker = current_context.set(
         replace(ctx, session_id=session_id, turn_id=request_id or str(uuid.uuid4()))
     )
     try:
-        return executar_fluxo_assessor(pergunta, session_id, ctx.identity.user_id)
+        return executar_fluxo_chat(pergunta, session_id, ctx.identity.user_id)
     finally:
         current_context.reset(marker)
 
@@ -45,10 +45,8 @@ def executar_no_contexto(
 def chat(payload: ChatRequest, ctx: Authenticated) -> ChatResponse:
     if payload.user_id != ctx.identity.user_id:
         raise HTTPException(403, "user_id diverge da identidade autenticada.")
-    return ChatResponse(
-        resposta=executar_no_contexto(
-            ctx, payload.pergunta, payload.session_id, payload.request_id
-        )
+    return executar_no_contexto(
+        ctx, payload.pergunta, payload.session_id, payload.request_id
     )
 
 
@@ -65,7 +63,7 @@ def chat_audio(
     conteudo = audio.file.read(TAMANHO_MAXIMO_BYTES + 1)
     texto = transcrever_audio(conteudo, audio.filename or "audio.webm")
     resposta = executar_no_contexto(ctx, texto, session_id, request_id)
-    return ChatAudioResponse(transcricao=texto, resposta=resposta)
+    return ChatAudioResponse(transcricao=texto, **resposta.model_dump())
 
 
 @router.post("/chat/encerrar", response_model=EncerrarSessaoResponse)

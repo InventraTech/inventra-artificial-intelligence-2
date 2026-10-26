@@ -1,5 +1,6 @@
 import uuid
 from concurrent.futures import ThreadPoolExecutor
+from dataclasses import replace
 from datetime import timedelta
 
 import pytest
@@ -45,7 +46,7 @@ def approve(p, actor=None, decision="approve", proposal_hash=None):
             proposal_hash=proposal_hash or p["proposal_hash"],
             reason="Decisão de teste",
         ),
-        actor or ctx("demo-supervisor"),
+        actor or ctx(p["requester_id"]),
     )
 
 
@@ -65,7 +66,7 @@ def test_only_approval_executes_and_preserves_original_requester():
     assert done["status"] == "CONCLUIDA"
     assert done["result"]["mocked"] is True
     assert done["requester_id"] == "demo-estoquista"
-    assert done["decided_by"] == "demo-supervisor"
+    assert done["decided_by"] == "demo-estoquista"
     assert balance() == 40
     assert approve(p)["status"] == "CONCLUIDA"
     assert balance() == 40
@@ -87,7 +88,7 @@ def test_concurrent_decisions_execute_once():
 
 
 @pytest.mark.parametrize(
-    "token", ["demo-estoquista", "demo-comprador", "demo-outra-cozinha"]
+    "token", ["demo-supervisor", "demo-comprador", "demo-outra-cozinha"]
 )
 def test_decision_denied_for_wrong_role_or_kitchen(token):
     p = proposal()
@@ -171,7 +172,7 @@ def test_uncertain_execution_is_never_repeated(monkeypatch):
     assert len(calls) == 1
 
 
-def test_missing_delegation_retains_approval_without_execution(monkeypatch):
+def test_changed_business_mode_retains_approval_without_execution(monkeypatch):
     p = proposal()
     monkeypatch.setattr(approvals, "BUSINESS_MODE", "spring")
     done = approve(p)
@@ -216,12 +217,37 @@ def test_real_edit_count_has_no_invented_endpoint(monkeypatch):
     ("token", "operation", "parameters", "permitido"),
     [
         ("demo-estoquista", Operation.CONSUME, {"batchId": 1, "quantity": "2"}, True),
-        ("demo-estoquista", Operation.CREATE_REQUISITION, {"type": "PURCHASE", "origin": "app"}, False),
-        ("demo-estoquista", Operation.CREATE_PRODUCT, {"name": "Sal", "unitId": 1}, False),
-        ("demo-comprador", Operation.CREATE_REQUISITION, {"type": "PURCHASE", "origin": "app"}, True),
+        (
+            "demo-estoquista",
+            Operation.CREATE_REQUISITION,
+            {"type": "PURCHASE", "origin": "app"},
+            False,
+        ),
+        (
+            "demo-estoquista",
+            Operation.CREATE_PRODUCT,
+            {"name": "Sal", "unitId": 1},
+            False,
+        ),
+        (
+            "demo-comprador",
+            Operation.CREATE_REQUISITION,
+            {"type": "PURCHASE", "origin": "app"},
+            True,
+        ),
         ("demo-comprador", Operation.CONSUME, {"batchId": 1, "quantity": "2"}, False),
-        ("demo-comprador", Operation.CREATE_PRODUCT, {"name": "Sal", "unitId": 1}, False),
-        ("demo-supervisor", Operation.CREATE_PRODUCT, {"name": "Sal", "unitId": 1}, True),
+        (
+            "demo-comprador",
+            Operation.CREATE_PRODUCT,
+            {"name": "Sal", "unitId": 1},
+            False,
+        ),
+        (
+            "demo-supervisor",
+            Operation.CREATE_PRODUCT,
+            {"name": "Sal", "unitId": 1},
+            True,
+        ),
         ("demo-supervisor", Operation.CONSUME, {"batchId": 1, "quantity": "2"}, True),
     ],
 )
@@ -232,8 +258,79 @@ def test_cargo_so_propoe_operacoes_da_sua_area(token, operation, parameters, per
         idempotency_key=str(uuid.uuid4()),
     )
     if permitido:
-        assert approvals.create_proposal(payload, ctx(token))["status"] == "AGUARDANDO_APROVACAO"
+        assert (
+            approvals.create_proposal(payload, ctx(token))["status"]
+            == "AGUARDANDO_APROVACAO"
+        )
     else:
         with pytest.raises(HTTPException) as erro:
             approvals.create_proposal(payload, ctx(token))
         assert erro.value.status_code == 403
+
+
+def test_current_permissions_are_revalidated_at_confirmation_and_execute():
+    p = proposal()
+    changed = replace(
+        ctx(), identity=ctx().identity.model_copy(update={"role": "COMPRADOR"})
+    )
+    with pytest.raises(HTTPException) as error:
+        approve(p, changed)
+    assert error.value.status_code == 403
+    assert balance() == 50
+    approve(p)
+    with pytest.raises(HTTPException) as error:
+        approvals.execute_approved(p["id"], changed)
+    assert error.value.status_code == 403
+
+
+def test_fresh_requester_context_executes_without_delegation_or_stored_jwt(monkeypatch):
+    p = proposal()
+    token = "fresh-opaque-credential"
+    fresh = replace(ctx(), token=SecretStr(token))
+    original = MockGateway()
+    observed = []
+
+    class Gateway:
+        query = original.query
+
+        def execute(self, action, requester, current, key):
+            observed.append(current.token.get_secret_value())
+            return original.execute(action, requester, current, key)
+
+    monkeypatch.setattr(approvals, "gateway", lambda: Gateway())
+    done = approve(p, fresh)
+    assert done["status"] == "CONCLUIDA" and observed == [token]
+    assert token not in str(get_db().approvals.find_one({"_id": p["id"]}))
+    with pytest.raises(HTTPException) as error:
+        approvals.execute_approved(p["id"], ctx("demo-supervisor"))
+    assert error.value.status_code == 403
+
+
+def test_legacy_third_party_decision_cannot_execute_under_new_policy():
+    p = proposal()
+    get_db().approvals.update_one(
+        {"_id": p["id"]},
+        {
+            "$set": {
+                "status": "APROVADA_PENDENTE_INTEGRACAO",
+                "decision": "approve",
+                "decided_by": "demo-supervisor",
+            }
+        },
+    )
+    with pytest.raises(HTTPException) as error:
+        approvals.execute_approved(p["id"], ctx())
+    assert error.value.status_code == 409
+    assert balance() == 50
+
+
+def test_same_role_other_requester_is_denied():
+    p = proposal()
+    other = replace(
+        ctx(),
+        identity=ctx().identity.model_copy(update={"user_id": "other-stock-user"}),
+    )
+    with pytest.raises(HTTPException) as error:
+        approve(p, other)
+    assert error.value.status_code == 404
+    assert balance() == 50

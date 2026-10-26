@@ -70,8 +70,8 @@ def criar_servidor(ctx: RequestContext) -> MCPServer:
         version="1.0.0",
         instructions=(
             f"Tools da IAI do Inventra para {identidade.name} ({identidade.role}). "
-            "As tools propor_* só criam propostas pendentes; a aprovação é feita por um "
-            "Supervisor em /approvals. Consulte os dados antes de propor e nunca invente IDs."
+            "As tools propor_* só criam propostas pendentes; somente o próprio solicitante "
+            "confirma em /approvals. Consulte os dados antes de propor e nunca invente IDs."
         ),
     )
     for ferramenta in [*TOOLS_POR_CARGO[identidade.role], *TOOLS_MEMORIA, faq_retriever]:

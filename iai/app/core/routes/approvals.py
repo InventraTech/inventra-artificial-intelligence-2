@@ -1,6 +1,6 @@
 from fastapi import APIRouter, Query
 
-from iai.app.core.infra.security import Authenticated, require_supervisor
+from iai.app.core.infra.security import Authenticated
 from iai.app.core.inventra.approvals import (
     create_proposal,
     decide,
@@ -31,8 +31,8 @@ def listing(
 
 @router.get("/inbox")
 def inbox(ctx: Authenticated):
-    require_supervisor(ctx)
-    return list_proposals(ctx, "AGUARDANDO_APROVACAO")
+    # A inbox é pessoal; a listagem administrativa permanece disponível em GET /approvals.
+    return list_proposals(ctx, "AGUARDANDO_APROVACAO", mine=True)
 
 
 @router.get("/{identifier}")
