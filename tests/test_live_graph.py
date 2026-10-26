@@ -331,3 +331,42 @@ def test_live_direct_call_cannot_bypass_middleware(monkeypatch):
         current_context.reset(marker)
     assert error.value.status_code == 502
     assert get_db().business_mock.count_documents({}) == 0
+
+
+def test_pergunta_de_faq_percorre_o_grafo_e_mantem_jev_individual(monkeypatch):
+    """Busca FAQ determinística passa pelo JEV; o modelo apenas redige."""
+    monkeypatch.setattr(graph, "LLM_MODE", "live")
+    monkeypatch.setattr(graph, "guardrail_insulto", lambda text: {"bloqueado": False})
+    monkeypatch.setattr(graph, "guardrail_escopo", lambda text: {"bloqueado": False})
+    monkeypatch.setattr(
+        graph,
+        "router_app",
+        SimpleNamespace(
+            invoke=lambda *a, **kw: {"messages": [AIMessage(content="ROUTE=faq")]}
+        ),
+    )
+
+    seen = []
+
+    def evaluate(state):
+        seen.append(state)
+        return jev_evaluation(fields=state["tool"]["schema"].get("properties", {}))
+
+    monkeypatch.setattr(judge, "evaluate", evaluate)
+    monkeypatch.setattr(
+        graph,
+        "llm_especialista",
+        SimpleNamespace(
+            invoke=lambda *a, **kw: AIMessage(content="O OCR lê a foto do produto.")
+        ),
+    )
+    marker = current_context.set(replace(context_for(), turn_id="faq-turn"))
+    try:
+        answer = graph.executar_fluxo_assessor(
+            "O que é o OCR?", "faq", "demo-estoquista"
+        )
+    finally:
+        current_context.reset(marker)
+    assert len(seen) == 1 and seen[0]["tool"]["name"] == "faq_retriever"
+    assert "O OCR lê a foto do produto." in answer
+    assert "JEV" not in answer and "confirmar" not in answer

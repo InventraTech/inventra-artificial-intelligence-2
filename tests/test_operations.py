@@ -63,8 +63,17 @@ def test_restock_adjustment_and_insufficient_balance():
     )
     from fastapi import HTTPException
 
+    from iai.app.core.inventra.acoes import solicitar_confirmacao
+    from iai.app.core.inventra.domain import Action
+
     with pytest.raises(HTTPException) as denied:
-        approved("registrar_saida", {"batchId": 1, "quantity": 10})
+        solicitar_confirmacao(
+            Action(
+                operation="registrar_saida", parameters={"batchId": 1, "quantity": 10}
+            ),
+            "Saldo insuficiente",
+            context_for(),
+        )
     assert denied.value.status_code == 409
     assert (
         get_db().business_mock.find_one({"_id": "1:batch:1"})["data"]["currentQuantity"]
@@ -72,7 +81,7 @@ def test_restock_adjustment_and_insufficient_balance():
     )
 
 
-def test_requisition_items_are_added_removed_and_cancelled_with_approval():
+def test_requisition_items_are_added_removed_and_cancelled():
     req = approved("criar_requisicao", {"type": "PURCHASE", "origin": "cozinha"})
     rid = req["result"]["data"]["id"]
     assert req["result"]["data"]["requester"]["id"] == "demo-comprador"
@@ -169,16 +178,56 @@ def test_capabilities_lista_tools_por_agente_e_cargos():
 
     from iai.app.main import app
 
-    corpo = TestClient(app).get(
-        "/queries/capabilities", headers={"Authorization": "Bearer demo-estoquista"}
-    ).json()
-    nomes = {agente: {t["name"] for t in tools} for agente, tools in corpo["agents"].items()}
+    corpo = (
+        TestClient(app)
+        .get(
+            "/queries/capabilities", headers={"Authorization": "Bearer demo-estoquista"}
+        )
+        .json()
+    )
+    nomes = {
+        agente: {t["name"] for t in tools} for agente, tools in corpo["agents"].items()
+    }
     assert "propor_registrar_saida" in nomes["estoquista"]
     assert "propor_criar_requisicao" not in nomes["estoquista"]
     assert "propor_criar_requisicao" in nomes["comprador"]
     assert "propor_registrar_saida" not in nomes["comprador"]
     assert nomes["estoquista"] | nomes["comprador"] <= nomes["supervisor"]
-    assert "propor_criar_produto" in nomes["supervisor"] - nomes["estoquista"] - nomes["comprador"]
+    assert (
+        "propor_criar_produto"
+        in nomes["supervisor"] - nomes["estoquista"] - nomes["comprador"]
+    )
     roles = {o["operation"]: o["allowed_roles"] for o in corpo["operations"]}
     assert roles["criar_produto"] == ["SUPERVISOR"]
     assert roles["registrar_saida"] == ["ESTOQUISTA", "SUPERVISOR"]
+
+
+def test_requisition_draft_lifecycle_survives_hitl_integration():
+    from fastapi import HTTPException
+
+    req = approved("criar_requisicao", {"type": "PURCHASE", "origin": "IAI"})
+    identifier = req["result"]["data"]["id"]
+    assert req["result"]["data"]["status"] == "DRAFT"
+    item = approved(
+        "adicionar_item_requisicao",
+        {"requisitionId": identifier, "productId": 1, "quantity": 2},
+    )
+    assert item["status"] == "CONCLUIDA"
+    get_db().business_mock.update_one(
+        {"_id": f"1:requisition:{identifier}"},
+        {"$set": {"data.status": "UNDER_REVIEW"}},
+    )
+    with pytest.raises(HTTPException) as error:
+        approved(
+            "adicionar_item_requisicao",
+            {"requisitionId": identifier, "productId": 1, "quantity": 1},
+        )
+    assert error.value.status_code == 409
+    cancelled = approved(
+        "cancelar_requisicao",
+        {"requisitionId": identifier, "reason": "Cancelamento confirmado"},
+    )
+    assert (
+        cancelled["status"] == "CONCLUIDA"
+        and cancelled["result"]["data"]["status"] == "CANCELLED"
+    )

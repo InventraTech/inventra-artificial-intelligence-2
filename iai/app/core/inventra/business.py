@@ -1,4 +1,4 @@
-"""Adaptadores de negócio. Somente o serviço de aprovação chama execute()."""
+"""Adaptadores de negócio. Somente o serviço de confirmação humana deve chamar execute()."""
 
 from collections import Counter
 from datetime import timedelta
@@ -516,7 +516,7 @@ class MockGateway:
                             "id": 1,
                             "type": "PURCHASE",
                             "origin": "demo",
-                            "status": "UNDER_REVIEW",
+                            "status": "DRAFT",
                             "requester": {"id": "demo-comprador"},
                         },
                     ),
@@ -843,7 +843,7 @@ class MockGateway:
                 dict(
                     p,
                     id=new_id("requisition"),
-                    status="UNDER_REVIEW",
+                    status="DRAFT",
                     requester={"id": requester["user_id"]},
                 ),
             )
@@ -853,8 +853,15 @@ class MockGateway:
             Operation.CANCEL_REQUISITION,
         }:
             req = find("requisition", p["requisitionId"])
-            if not req or req["status"] != "UNDER_REVIEW":
-                return failure("CONFLITO", "Requisição não está em análise.")
+            aceitos = (
+                {"DRAFT", "UNDER_REVIEW", "APPROVED"}
+                if op == Operation.CANCEL_REQUISITION
+                else {"DRAFT"}
+            )
+            if not req or req["status"] not in aceitos:
+                return failure(
+                    "CONFLITO", "A requisição não está num estado que permita isso."
+                )
             if op == Operation.CANCEL_REQUISITION:
                 return save(
                     "requisition", dict(req, status="CANCELLED", reason=p["reason"])

@@ -1,7 +1,7 @@
 """Intérprete determinístico LIMITADO, exclusivamente demonstrativo e sem LLM.
 
 O atendimento natural completo usa agentes live. Esta simulação permite provar o
-fluxo de aprovação offline; não é apresentada como capacidade geral de linguagem.
+fluxo dos pedidos de ação offline; não é apresentada como capacidade geral de linguagem.
 """
 
 import re
@@ -16,6 +16,7 @@ from iai.app.core.infra.security import context
 from iai.app.core.inventra.business import gateway
 from iai.app.core.inventra.domain import Operation, Query
 from iai.app.core.schemas import Estado
+from iai.app.core.tools.documentos import buscar_documentos
 from iai.app.core.tools.faq import faq_retriever
 from iai.app.core.tools.memoria import buscar_historico
 from iai.app.core.tools.operational import PROPOSAL_TOOLS, consultar_inventra
@@ -82,12 +83,20 @@ def plan_demo_reads(text):
         if not resources:
             calls = []
         calls.append({"name": "buscar_historico", "args": {"busca": ""}})
+    if not conceptual and any(
+        t in normalized
+        for t in ("documento", "arquivo", "planilha", "contrato", "anexo")
+    ):
+        if not resources:
+            calls = []
+        calls.append({"name": "buscar_documentos", "args": {"consulta": text}})
     return [dict(c, id=f"demo-read-{i}") for i, c in enumerate(calls)]
 
 
 read_graph = StateGraph(Estado)
 read_graph.add_node(
-    "tools", ToolNode([consultar_inventra, faq_retriever, buscar_historico])
+    "tools",
+    ToolNode([consultar_inventra, faq_retriever, buscar_historico, buscar_documentos]),
 )
 read_graph.set_entry_point("tools")
 read_graph.add_edge("tools", END)
@@ -186,7 +195,7 @@ def demo_node(state):
         messages.append(
             {
                 "role": "assistant",
-                "content": "Confira as propostas demonstrativas; falta de dados não é execução.",
+                "content": "Pedidos validados, mas não executados (sem confirmação humana).",
             }
         )
         return {

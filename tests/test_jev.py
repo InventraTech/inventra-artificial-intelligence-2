@@ -176,3 +176,21 @@ def test_config_reads_app_env_preserving_precedence(
         monkeypatch.delenv("TYPESAFE_API_KEY")
     loaded = runpy.run_path(str(config_path))
     assert loaded["TYPESAFE_API_KEY"].get_secret_value() == expected
+
+
+def test_config_rejects_legacy_read_bypass_scope():
+    import os
+    import subprocess
+    import sys
+
+    env = dict(os.environ, JEV_ESCOPO="escrita")
+    result = subprocess.run(
+        [sys.executable, "-c", "import iai.app.core.config"],
+        env=env,
+        capture_output=True,
+        text=True,
+        check=False,
+        timeout=15,
+    )
+    assert result.returncode != 0
+    assert "JEV_ESCOPO=todas" in result.stderr

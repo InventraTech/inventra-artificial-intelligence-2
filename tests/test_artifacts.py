@@ -106,7 +106,7 @@ def test_demo_pie_counts_real_requisitions_without_fabricated_categories():
     (artifact,) = result["artifacts"]
     assert artifact["chart_type"] == "pie"
     assert dict(zip(artifact["labels"], artifact["datasets"][0]["data"])) == {
-        "UNDER_REVIEW": 1,
+        "DRAFT": 1,
         "APPROVED": 1,
     }
 

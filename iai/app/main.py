@@ -1,4 +1,5 @@
 import asyncio
+import logging
 from contextlib import asynccontextmanager, suppress
 
 from fastapi import FastAPI
@@ -15,7 +16,12 @@ from iai.app.core.config import (
 )
 from iai.app.core.infra.storage import get_db, initialize_storage
 from iai.app.core.inventra.approvals import expire_pending
-from iai.app.core.routes import approvals, chat, metrics, queries
+from iai.app.core.routes import approvals, arquivos, chat, metrics, queries
+
+# Sem isso o Python só mostra WARNING+: as decisões do JEV (INFO) nunca chegavam aos logs do Render.
+logging.basicConfig(level=logging.INFO, format="%(levelname)s:%(name)s: %(message)s")
+for _barulhento in ("httpx", "httpcore", "pymongo", "urllib3"):
+    logging.getLogger(_barulhento).setLevel(logging.WARNING)
 
 
 async def expiration_worker():
@@ -23,7 +29,7 @@ async def expiration_worker():
         try:
             await asyncio.to_thread(expire_pending)
         except PyMongoError:
-            pass  # /health informa indisponibilidade; não converter execução em sucesso
+            pass
         await asyncio.sleep(30)
 
 
@@ -34,16 +40,18 @@ async def lifespan(app):
     except PyMongoError:
         pass
     task = asyncio.create_task(expiration_worker())
-    yield
-    task.cancel()
-    with suppress(asyncio.CancelledError):
-        await task
+    try:
+        yield
+    finally:
+        task.cancel()
+        with suppress(asyncio.CancelledError):
+            await task
 
 
 app = FastAPI(
     title="IAI - Inteligência Artificial do Inventra",
     version="0.2.0",
-    description="Consultas e propostas aprovadas. Modos mock são explicitamente identificados.",
+    description="Consultas, documentos, artefatos e ações confirmadas pelo solicitante. Modos mock são explicitamente identificados.",
     lifespan=lifespan,
 )
 if CORS_ORIGINS:
@@ -51,11 +59,12 @@ if CORS_ORIGINS:
         CORSMiddleware,
         allow_origins=CORS_ORIGINS,
         allow_credentials=False,
-        allow_methods=["GET", "POST"],
+        allow_methods=["GET", "POST", "DELETE"],
         allow_headers=["Authorization", "Content-Type"],
     )
 app.include_router(chat.router)
 app.include_router(approvals.router)
+app.include_router(arquivos.router)
 app.include_router(queries.router)
 app.include_router(metrics.router)
 

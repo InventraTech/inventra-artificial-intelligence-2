@@ -6,6 +6,7 @@ os.environ["IAI_AUTH_MODE"] = "mock"
 os.environ["IAI_BUSINESS_MODE"] = "mock"
 os.environ["IAI_STORAGE_MODE"] = "mock"
 os.environ["IAI_LLM_MODE"] = "demo"
+os.environ["JEV_ESCOPO"] = "todas"
 os.environ["LANGSMITH_TRACING"] = "false"
 os.environ["CORS_ORIGINS"] = "http://localhost:3000,http://localhost:5173"
 

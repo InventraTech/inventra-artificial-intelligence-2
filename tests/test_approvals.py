@@ -334,3 +334,28 @@ def test_same_role_other_requester_is_denied():
         approve(p, other)
     assert error.value.status_code == 404
     assert balance() == 50
+
+
+def test_approved_action_survives_dependency_outage_and_revalidates_before_retry(
+    monkeypatch,
+):
+    from iai.app.core.inventra.business import result
+
+    p = proposal()
+    original = MockGateway()
+
+    class Unavailable:
+        def query(self, query, current):
+            return result(False, "SERVICO_INDISPONIVEL", "Serviço indisponível.")
+
+    monkeypatch.setattr(approvals, "gateway", lambda: Unavailable())
+    pending = approve(p)
+    assert pending["decision"] == "approve"
+    assert pending["status"] == "APROVADA_PENDENTE_INTEGRACAO"
+    assert "VALIDACAO_PENDENTE" in pending["execution_error"]
+    assert get_db().execution_mock.count_documents({}) == 0
+    monkeypatch.setattr(approvals, "gateway", lambda: original)
+    done = approvals.execute_approved(p["id"], ctx())
+    assert done["status"] == "CONCLUIDA" and balance() == 40
+    approvals.execute_approved(p["id"], ctx())
+    assert get_db().execution_mock.count_documents({}) == 1

@@ -1,7 +1,6 @@
 """Tools leem dados ou CRIAM PROPOSTAS; não expõem execução/decisão ao modelo."""
 
 import json
-from hashlib import sha256
 
 from fastapi import HTTPException
 from langchain_core.tools import StructuredTool, tool
@@ -11,8 +10,8 @@ from pymongo.errors import PyMongoError
 from iai.app.core.assistant.tool_gate import protect_tool
 from iai.app.core.config import STORAGE_MODE
 from iai.app.core.infra.security import context
+from iai.app.core.inventra.acoes import solicitar_confirmacao
 from iai.app.core.inventra.approvals import (
-    create_proposal,
     get_proposal,
     list_proposals,
     public,
@@ -24,7 +23,6 @@ from iai.app.core.inventra.domain import (
     STOCK_OPERATIONS,
     Action,
     Operation,
-    ProposalInput,
     Query,
     ToolResult,
 )
@@ -115,16 +113,7 @@ def proposal_tool(operation):
             ctx = context()
             justification = parameters.pop("justification")
             action = Action(operation=operation, parameters=parameters)
-            fingerprint = sha256(
-                json.dumps(action.model_dump(mode="json"), sort_keys=True).encode()
-            ).hexdigest()
-            key = sha256(f"{ctx.turn_id}:{fingerprint}".encode()).hexdigest()
-            proposal = create_proposal(
-                ProposalInput(
-                    action=action, justification=justification, idempotency_key=key
-                ),
-                ctx,
-            )
+            proposal = solicitar_confirmacao(action, justification, ctx)
             return json.dumps(
                 {
                     "ok": True,

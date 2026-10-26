@@ -300,7 +300,8 @@ class Query(StrictModel):
         if (
             self.resource == "requisicoes"
             and self.status
-            and self.status not in {"UNDER_REVIEW", "APPROVED", "REJECTED", "CANCELLED"}
+            and self.status
+            not in {"DRAFT", "UNDER_REVIEW", "APPROVED", "REJECTED", "CANCELLED"}
         ):
             raise ValueError("Status de requisição inválido.")
         return self

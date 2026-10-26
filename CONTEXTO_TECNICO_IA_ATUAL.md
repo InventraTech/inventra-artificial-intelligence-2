@@ -1,7 +1,7 @@
 # Contexto técnico atual da IAI — Inventra
 
 Revisão: 26/10/2026. Backend Python local, branch `fix/human-in-the-loop`, baseado no commit
-`001ff2b670206ff78af2ae07821fe8811b49ba9d` com alterações locais posteriores.
+`7aef497` (checkpoint de Artefatos/HITL/Paralelismo), consolidado com `main` em `ae7155c` (#22 e #23).
 Este documento descreve código implementado; não certifica implantação ou serviços externos.
 Caminhos partem da raiz do repositório.
 
@@ -37,6 +37,7 @@ Invariantes:
 | `iai/app/core/assistant/graph.py` | Agentes, conexões e execução completa; helper textual e resposta tipada |
 | `iai/app/core/assistant/prompts.py` | Persona, regras, temporalidade, leituras independentes e seleção visual |
 | `iai/app/core/assistant/llms.py` | Modelos e fallback |
+| `iai/app/core/assistant/respostas.py` | Revisão determinística das propostas e diagnóstico seguro de falhas |
 | `iai/app/core/assistant/guardrail.py` | Regex de injeção, anonimização, moderação, escopo e restauração de PII |
 | `iai/app/core/assistant/tool_gate.py` | Candidatos, política de lotes, JEV, permissões de uso único e evidências |
 | `iai/app/core/assistant/judge.py` | REST TypeSafe e política determinística sobre probabilidades |
@@ -44,10 +45,14 @@ Invariantes:
 | `iai/app/core/assistant/memory.py` | Sessões, últimas mensagens, encerramento e resumos |
 | `iai/app/core/tools/` | Consulta operacional, propostas, FAQ e histórico |
 | `iai/app/core/inventra/domain.py` | `Query`, `Action`, 16 operações, schemas e `ROLE_OPERATIONS` |
+| `iai/app/core/inventra/acoes.py` | Entrada compatível das tools, delega ao HITL durável |
 | `iai/app/core/inventra/approvals.py` | Snapshot, hash, decisão, revalidação, expiração, auditoria e execução |
 | `iai/app/core/inventra/business.py` | Interface `BusinessGateway`, adaptadores Spring/mock |
 | `iai/app/core/infra/` | Identidade, Mongo, busca textual, remoção de segredos e métricas |
 | `iai/app/extras/demo.py` | Interpretação limitada sem LLM, plano de leituras e ToolNode demonstrativo |
+| `iai/app/core/arquivos/` | Validação de upload, extração de texto/visão, guardrails, chunks, embeddings e Qdrant |
+| `iai/app/core/tools/documentos.py` | Tool de recuperação de documentos autorizados |
+| `iai/app/core/routes/arquivos.py` | Upload, listagem e exclusão de arquivos por identidade/cozinha |
 | `iai/app/extras/audio.py` | Transcrição Groq/Whisper |
 | `iai/app/extras/mcp_server.py` | Ferramentas por perfil via stdio |
 | `iai/data/faq_inventra.jsonl` | 24 pares documentais `p`/`r`; não é estoque atual |
@@ -61,8 +66,8 @@ Invariantes:
 - JEV: TypeSafe REST `https://api.typesafe.ai/v1/systemone`, padrão `jev-1.13.0`.
 - Transcrição: Groq `whisper-large-v3-turbo`, português.
 
-Roteador tem `buscar_historico`; FAQ tem `faq_retriever`. Os três especialistas têm
-`consultar_inventra`, `consultar_solicitacoes_iai`, histórico, FAQ e suas propostas.
+Roteador tem `buscar_historico`; FAQ tem um subgrafo de busca determinística com `faq_retriever`, JEV e uma etapa de redação (fallback literal se o modelo falhar). Os três especialistas têm
+`consultar_inventra`, `consultar_solicitacoes_iai`, histórico, FAQ, `buscar_documentos` e suas propostas.
 Estoquista: 7 operações de lotes/estoque/inventário. Comprador: 6 de requisições/fornecedores.
 Supervisor: todas as 16, incluindo criar/editar/desativar produto. Rota por intenção não
 concede cargo: JEV e serviço de propostas aplicam `ROLE_OPERATIONS` da identidade.
@@ -105,8 +110,8 @@ Ausência de chaves generativas no live retorna 503; falhas inesperadas, 502 seg
 - Ambos têm `source` e `mocked`.
 
 Fontes precisam ser ToolResults operacionais bem-sucedidos da rodada atual, associados à
-chamada original. No live, precisam também de registro JEV `EXECUTED`. FAQ/histórico não
-são fontes numéricas para artefatos. Projeção usa whitelist de campos dos contratos.
+chamada original. No live, precisam também de registro JEV `EXECUTED`. FAQ/histórico/documentos enviados não
+são fontes numéricas para artefatos; saldos vêm das consultas operacionais. Projeção usa whitelist de campos dos contratos.
 
 O modelo rápido escolhe somente `kind=none|table|bar|pie` e `source_id`; não recebe poder de
 gerar arrays numéricos. Demo usa regras determinísticas. O código copia valores, valida
@@ -128,10 +133,11 @@ RETRY_SPECIALIST (até três tentativas de reparo), ASK_USER ou REJECT. Falha n�
 `protect_tool` exige permissão de uso único no escopo live, vinculada a nome/argumentos.
 
 Concorrência máxima de quatro. Somente lotes com múltiplas leituras da whitelist
-`consultar_inventra`, `faq_retriever`, `buscar_historico` liberam o bloqueio abrangente.
+`consultar_inventra`, `faq_retriever`, `buscar_historico`, `buscar_documentos` liberam o bloqueio abrangente.
 Cada chamada conserva JEV próprio. Captura evidências anteriores ao lote; atualizações
 compartilhadas usam lock curto. ToolNode propaga ContextVar e agrega mensagens/Commands.
 Lotes com proposta conservam apenas a primeira etapa para o modelo continuar sequencialmente.
+JEV_ESCOPO=todas é obrigatório; a dispensa de leituras existente na main é incompatível com esta política.
 
 Fontes com erro não fornecem dados. Se uma leitura funciona e outra fica indisponível,
 permite síntese parcial sem executar a rejeitada. Rejeições de segurança ou pedido de
@@ -182,6 +188,7 @@ ok/code/data/source/mocked/incomplete. Não existe paginação automática geral
 Rotas: /chat, /chat/audio, /chat/encerrar, /chat/historico/{user_id}, /chat/mensagens/{doc_id},
 /queries, /queries/capabilities, /approvals, /approvals/inbox, /approvals/{id},
 /approvals/{id}/decision, /approvals/{id}/execute, /metrics, /health e /docs.
+Requisições nascem em DRAFT; itens só mudam nesse estado, cancelamento também admite UNDER_REVIEW/APPROVED.
 Capabilities indica confirmation_actor=requester; a listagem de agentes ainda não enumera
 roteador/FAQ nem faq_retriever dos especialistas: graph.py é referência das tools conectadas.
 
@@ -192,7 +199,7 @@ A confirmação é HTTP pelo solicitante. Logs MCP vão para stderr.
 
 Memória: últimos 30 textos ativos; encerramento gera resumo via modelo rápido ou resumo
 demo limitado. Histórico busca até 200 resumos recentes e devolve até cinco pela ferramenta.
-FAQ retorna até quatro entradas por ranking textual. Sem embeddings, vetor ou treinamento.
+FAQ retorna até quatro entradas por ranking textual, sem embeddings. Documentos enviados usam embeddings e Qdrant; isso não altera a memória textual de conversa. Não há treinamento de modelo próprio.
 PII restaurada na resposta pode ser persistida; métricas não guardam texto, mas tracing
 LangSmith é canal externo separado e não deve ser presumido anônimo.
 
@@ -211,7 +218,9 @@ Preços são tabela estática; IAI_MODEL_PRICES_JSON não é lida. /health só t
 
 Python 3.12; LangChain 1.4.0, core 1.6.2, LangGraph 1.2.11, google-genai 4.2.1,
 langchain-groq 1.1.2, Pydantic 2, FastAPI, PyMongo, httpx, Groq, MCP e python-multipart.
-Nenhuma nova dependência de execução foi necessária para as três evoluções.
+As três evoluções não exigiram dependências próprias; a integração de documentos acrescenta as dependências da main listadas abaixo.
+
+Dependências incorporadas da main: qdrant-client>=1.15,<2.0, pypdf>=5,<7 e pillow>=11,<14.
 
 Métricas: callback inclui seleção de apresentação, tokens e tempos; preços desconhecidos
 ficam zero na estimativa, sem significar gratuidade. Custo TypeSafe, transcrição, resumo e
@@ -219,7 +228,7 @@ infraestrutura não integram o custo generativo do chat. ROI é premissa. Resolu
 jev:concluido de ferramenta, não prova execução de negócio nem verdade integral da redação.
 
 Fora do escopo: múltiplas cozinhas, vendas, frontend, OCR, e-mail, WhatsApp, novos especialistas,
-A2A, busca web, banco vetorial, streaming, renderização e novas operações de negócio.
+A2A, busca web, streaming, renderização e novas operações de negócio. O índice vetorial de documentos já foi incorporado da main.
 
 ## 10. Validação e continuidade
 
@@ -227,13 +236,13 @@ A suíte cobre contratos visuais, origem dos valores, ausência de preenchimento
 confirmação pelo solicitante, perfil atual, hash, snapshot, repetição/concorrência, decisões
 legadas, sobreposição de JEV/tools com barreiras, fan-in, falha parcial e isolamento de contexto.
 O teste Mongo opt-in prepara proposta em um processo e confirma em outro, com banco temporário.
-Validação local: **248 testes aprovados, 6 ignorados, cobertura 91,42%**; Ruff e mypy passaram.
+Validação local: **394 testes aprovados, 6 ignorados, cobertura 91,56%**; Ruff e mypy passaram.
 Os serviços externos e o teste de retomada com Mongo real ficaram desativados; não houve
-validação de integração em produção. O baseline anterior de cobertura era 90,34%.
+validação de integração em produção. O baseline anterior à consolidação era 91,42%; a base original tinha 90,34%.
 
 ```powershell
 .\.venv\Scripts\python.exe -m pip install -r requirements-dev.txt
-.\.venv\Scripts\python.exe -m pytest --cov=iai --cov-report=term --cov-fail-under=90.34 -q
+.\.venv\Scripts\python.exe -m pytest --cov=iai --cov-report=term --cov-fail-under=91.42 -q
 .\.venv\Scripts\python.exe -m ruff check iai
 .\.venv\Scripts\python.exe -m mypy iai --follow-imports=skip
 ```
@@ -246,3 +255,26 @@ persistência real sem executar o opt-in. Dockerfile e .dockerignore existem; bu
 Ao adicionar operação, revisar domain -> perfil -> ferramenta -> prompt -> JEV -> snapshot
 -> confirmação -> gateway -> testes. Para artefatos, preservar origem e cópia determinística;
 para paralelismo, não ampliar whitelist sem revisar efeitos, dependências e segurança.
+
+
+## Documentos incorporados da main
+
+POST /arquivos ingere PDF, DOCX, XLSX, PPTX, CSV, TXT e imagens; GET /arquivos lista os
+visíveis; DELETE /arquivos/{id} remove documentos autorizados. Produtos/fornecedores
+continuam sem exclusão física: exclusão de documentos é um recurso separado.
+Validação estrutural e guardrails antecedem indexação. Arquivos são divididos em trechos,
+embeddings usam Gemini e a persistência documental usa Qdrant com isolamento por cozinha/usuário.
+Supervisor pode compartilhar um documento com a cozinha. Imagens recebem descrição de visão;
+PDF escaneado sem texto não ganha OCR automaticamente e pode ser recusado.
+Sem Qdrant configurado, o recurso fica indisponível e o restante da IAI segue funcionando.
+
+Variáveis: QDRANT_URL, QDRANT_API_KEY, QDRANT_COLLECTION (inventra_documentos),
+EMBEDDING_MODEL (gemini-embedding-001), EMBEDDING_DIM (768), ARQUIVOS_MAX_BYTES (10 MB),
+ARQUIVOS_MAX_POR_ENVIO (10), ARQUIVOS_MAX_POR_USUARIO (50), ARQUIVOS_MAX_CARACTERES (120000),
+ARQUIVOS_GUARDRAIL_LLM (on). Esses guardrails de ingestão são separados do gate JEV das tools.
+O demo também reconhece referências simples a documentos para consulta; continua sendo intérprete limitado.
+
+Os testes usam Qdrant em memória e EmbedderLocal; isso não comprova integração com Qdrant Cloud
+ou embeddings Gemini reais. Fontes documentais não são autorização de escrita, confirmação humana
+ou saldo operacional atual. Nunca usar números de uma planilha enviada para preencher um gráfico
+operacional sem uma consulta autorizada que os confirme.

@@ -14,15 +14,11 @@ from iai.app.core.assistant.memory import (
 from iai.app.core.infra.security import current_context
 from iai.app.core.infra.storage import get_db
 from iai.app.core.inventra.domain import Operation
-from iai.app.core.tools.operational import (
-    PROPOSAL_TOOLS,
-    consultar_inventra,
-    consultar_solicitacoes_iai,
-)
+from iai.app.core.tools.operational import PROPOSAL_TOOLS, consultar_inventra
 from tests_helpers import context_for
 
 
-def test_tool_retries_in_same_turn_create_only_one_proposal():
+def test_propor_tools_persist_idempotently_but_never_execute():
     token = current_context.set(replace(context_for(), turn_id="stable-turn"))
     try:
         tool = PROPOSAL_TOOLS[Operation.CONSUME]
@@ -31,19 +27,13 @@ def test_tool_retries_in_same_turn_create_only_one_proposal():
         second = json.loads(tool.invoke(dict(args, quantity="10.000")))
         assert first["proposal"]["id"] == second["proposal"]["id"]
         assert first["executed"] is False
-        assert get_db().approvals.count_documents({}) == 1
+        assert first["code"] == "AGUARDANDO_APROVACAO"
         assert get_db().execution_mock.count_documents({}) == 0
+        assert get_db().approvals.count_documents({}) == 1
         assert "Parâmetros incompletos" in tool.invoke({"quantity": 10})
         assert json.loads(
             consultar_inventra.invoke({"resource": "produtos", "name": "Arroz"})
         )["mocked"]
-        persisted = json.loads(
-            consultar_solicitacoes_iai.invoke(
-                {"solicitacao_id": first["proposal"]["id"]}
-            )
-        )
-        assert persisted["data"]["status"] == "AGUARDANDO_APROVACAO"
-        assert not persisted["data"]["result"]
     finally:
         current_context.reset(token)
 
@@ -62,23 +52,18 @@ def test_tokens_never_enter_pii_map_or_model_text():
         assert "SEGREDO_REMOVIDO" in text
 
 
-def test_credentials_are_rejected_in_proposals_and_decisions():
-    from pydantic import ValidationError
-
-    from iai.app.core.inventra.domain import Action, DecisionInput, ProposalInput
-
-    with pytest.raises(ValidationError):
-        ProposalInput(
-            action=Action(
-                operation="registrar_saida", parameters={"batchId": 1, "quantity": 2}
-            ),
-            justification="token=secret",
-            idempotency_key="request-1",
+def test_credentials_are_rejected_in_action_requests():
+    token = current_context.set(replace(context_for(), turn_id="segredo"))
+    try:
+        out = json.loads(
+            PROPOSAL_TOOLS[Operation.CONSUME].invoke(
+                {"batchId": 1, "quantity": 2, "justification": "token=secret"}
+            )
         )
-    with pytest.raises(ValidationError):
-        DecisionInput(
-            decision="approve", proposal_hash="0" * 64, reason="Bearer secret-token"
-        )
+        assert out["ok"] is False and out["executed"] is False
+        assert "tokens ou senhas" in out["message"]
+    finally:
+        current_context.reset(token)
 
 
 def test_memory_search_uses_query_and_isolates_user_and_kitchen():
@@ -132,3 +117,67 @@ def test_catalogo_global_nao_e_listado_sem_filtro():
     resposta = json.loads(consultar_inventra.invoke({"resource": "produtos"}))
     assert resposta["ok"] is False and resposta["code"] == "USE_ESTOQUE"
     assert "estoque" in resposta["message"]
+
+
+def test_credentials_are_rejected_in_proposals_and_decisions():
+    from pydantic import ValidationError
+
+    from iai.app.core.inventra.domain import Action, DecisionInput, ProposalInput
+
+    with pytest.raises(ValidationError):
+        ProposalInput(
+            action=Action(
+                operation="registrar_saida", parameters={"batchId": 1, "quantity": 2}
+            ),
+            justification="token=secret",
+            idempotency_key="request-1",
+        )
+    with pytest.raises(ValidationError):
+        DecisionInput(
+            decision="approve", proposal_hash="0" * 64, reason="Bearer secret-token"
+        )
+
+
+def test_pending_action_tool_reads_persisted_state_and_handles_unavailability(
+    monkeypatch,
+):
+    from pymongo.errors import PyMongoError
+
+    from iai.app.core.tools import operational
+
+    marker = current_context.set(replace(context_for(), turn_id="status-integration"))
+    try:
+        proposal = json.loads(
+            PROPOSAL_TOOLS[Operation.CONSUME].invoke(
+                {"batchId": 1, "quantity": 2, "justification": "uso"}
+            )
+        )["proposal"]
+        found = json.loads(
+            operational.consultar_solicitacoes_iai.invoke(
+                {"solicitacao_id": proposal["id"]}
+            )
+        )
+        listing = json.loads(operational.consultar_solicitacoes_iai.invoke({}))
+        assert (
+            found["ok"] and found["data"]["proposal_hash"] == proposal["proposal_hash"]
+        )
+        assert found["data"]["status"] == "AGUARDANDO_APROVACAO"
+        assert listing["data"]["total"] == 1 and listing["mocked"] is True
+        assert (
+            json.loads(
+                operational.consultar_solicitacoes_iai.invoke(
+                    {"solicitacao_id": "missing"}
+                )
+            )["code"]
+            == "NAO_ENCONTRADO"
+        )
+
+        def unavailable(*args, **kwargs):
+            raise PyMongoError("database unavailable")
+
+        monkeypatch.setattr(operational, "list_proposals", unavailable)
+        result = json.loads(operational.consultar_solicitacoes_iai.invoke({}))
+        assert result["ok"] is False and result["code"] == "PERSISTENCIA_INDISPONIVEL"
+        assert get_db().execution_mock.count_documents({}) == 0
+    finally:
+        current_context.reset(marker)

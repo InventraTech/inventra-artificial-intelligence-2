@@ -40,8 +40,29 @@ from iai.app.core.inventra.domain import ROLE_OPERATIONS, Operation
 
 logger = logging.getLogger(__name__)
 SAFE_STOP = "Não consegui confirmar os dados para concluir esse pedido. Essa etapa não foi realizada; reformule o pedido para continuar."
+MOTIVOS_DE_RECUSA = {
+    "ROLE_NOT_ALLOWED": "o seu perfil não pode fazer essa operação.",
+    "TOOL_NOT_ALLOWED": "essa ferramenta não está disponível para este pedido.",
+    "SECRET_IN_ARGUMENTS": "o pedido contém algo que parece senha ou token; remova e tente de novo.",
+    "arguments_grounded": "não consegui identificar com certeza o produto, fornecedor ou lote citado. Diga o nome completo (e a marca ou a unidade).",
+    "business_rule_conflict": "esse pedido conflita com uma regra do Inventra.",
+    "unsafe_modification": "essa alteração precisa de confirmação humana.",
+    "missing_user_information": "falta uma informação que só você sabe.",
+}
+
+
+def mensagem_de_recusa(failed_checks):
+    """Texto para o usuário quando o gate para a etapa; nunca traz argumentos nem a conversa."""
+    for check in failed_checks or []:
+        if check in MOTIVOS_DE_RECUSA:
+            return f"Não consegui concluir esse pedido: {MOTIVOS_DE_RECUSA[check]} Essa etapa não foi realizada."
+    return SAFE_STOP
+
+
 UNAVAILABLE = "A consulta está temporariamente indisponível. Essa etapa não foi realizada; tente novamente mais tarde."
-PARALLEL_READS = frozenset({"consultar_inventra", "faq_retriever", "buscar_historico"})
+PARALLEL_READS = frozenset(
+    {"consultar_inventra", "faq_retriever", "buscar_historico", "buscar_documentos"}
+)
 FIELD_LABELS = {
     "quantity": "a quantidade e a unidade do produto",
     "newQuantity": "a quantidade final desejada e sua unidade",
@@ -205,7 +226,21 @@ def event(record, name):
         "at": datetime.now(UTC).isoformat(),
         **{k: record[k] for k in ("id", "agent", "tool", "attempt")},
     }
-    logger.info(name, extra={"jev": data})
+    detail = {
+        key: record[key]
+        for key in ("decision", "failed_checks", "missing_field", "error_type")
+        if record.get(key)
+    }
+    # O log do Render precisa mostrar POR QUE o juiz recusou (sem argumentos nem conversa).
+    logger.info(
+        "%s agent=%s tool=%s attempt=%s %s",
+        name,
+        record["agent"],
+        record["tool"],
+        record["attempt"],
+        json.dumps(detail, ensure_ascii=False, default=str) if detail else "",
+        extra={"jev": data},
+    )
     return data
 
 
@@ -496,7 +531,7 @@ class JevToolGate(AgentMiddleware):
                 halt = clarification(decision.missing_field)
                 events.append(event(record, "tool_user_input_required"))
             elif decision.decision == "REJECT":
-                halt = halt or SAFE_STOP
+                halt = halt or mensagem_de_recusa(decision.failed_checks)
             else:
                 events.append(event(record, "tool_retry"))
         record["finished_at"] = datetime.now(UTC).isoformat()

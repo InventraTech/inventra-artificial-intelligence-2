@@ -126,9 +126,9 @@ def snapshot(action, ctx):
             raise HTTPException(409, "Lote não ativo ou saldo insuficiente.")
     if op in {Operation.ADD_ITEM, Operation.REMOVE_ITEM, Operation.CANCEL_REQUISITION}:
         allowed = (
-            {"UNDER_REVIEW", "APPROVED"}
+            {"DRAFT", "UNDER_REVIEW", "APPROVED"}
             if op == Operation.CANCEL_REQUISITION
-            else {"UNDER_REVIEW"}
+            else {"DRAFT"}
         )
         if records["requisitionId"]["status"] not in allowed:
             raise HTTPException(409, "Estado da requisição não permite a operação.")

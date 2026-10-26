@@ -115,7 +115,7 @@ vencimento com produto validade e quantidade". Consultas escalares e conceitos c
 A seleção live usa saída estruturada do modelo rápido; o demo usa regras limitadas e não chama LLM.
 O histórico continua textual; os artefatos não são persistidos como visualizações recuperáveis.
 
-Leituras independentes de `consultar_inventra`, `faq_retriever` e `buscar_historico` podem ser emitidas
+Leituras independentes de `consultar_inventra`, `faq_retriever`, `buscar_historico` e `buscar_documentos` podem ser emitidas
 no mesmo lote e executadas com concorrência máxima de quatro. O `ToolNode` faz fan-in antes de
 retomar o especialista. Cada chamada live continua passando individualmente pelo JEV. Evidências
 são uma fotografia anterior ao lote, e permissões de uso único permanecem isoladas por contexto.
@@ -213,6 +213,40 @@ Para testar sem o Spring, acrescente em `env` os modos de demonstração
 `"IAI_MCP_TOKEN": "demo-supervisor"`. No Cursor, deixe o chat em **Agent** (em Ask as tools MCP
 não executam) e confira os logs em View → Output → MCP Logs. Não coloque o token no Git.
 
+## Documentos como contexto (arquivos + Qdrant)
+
+O usuário envia arquivos e os agentes passam a consultá-los com a tool `buscar_documentos`.
+
+| Rota | O que faz |
+|---|---|
+| `POST /arquivos` | multipart: `arquivos` (um ou vários, até `ARQUIVOS_MAX_POR_ENVIO`) e `compartilhar` (opcional; só SUPERVISOR). Pasta = vários arquivos; o caminho relativo no nome do arquivo vira o campo `pasta`. Devolve o status de cada arquivo (`indexado`/`recusado`/`erro`) |
+| `GET /arquivos` | documentos do usuário e os compartilhados pelo supervisor da cozinha |
+| `DELETE /arquivos/{arquivo_id}` | dono remove o próprio; supervisor remove qualquer um da própria cozinha |
+
+Aceitos: PDF (com texto), `.docx`, `.xlsx`, `.pptx`, `.csv`, `.txt`, `.md`, `.png`, `.jpg`, `.webp`.
+
+**Segurança (nada é gravado em disco nem executado)**, em `iai/app/core/arquivos/`:
+
+1. `seguranca.py`: lista de permitidos por extensão; recusa executáveis/scripts (`.exe`, `.dll`, `.bat`, `.ps1`, `.js`...),
+   compactados (`.zip`, `.rar`, `.7z`...), macros (`.docm`, `.xlsm`...), HTML/SVG, Office antigo e dupla extensão
+   (`fatura.exe.pdf`). Confere a **assinatura real** do conteúdo (um `.exe` renomeado para `.pdf` é barrado).
+   PDF sem JavaScript/Launch/anexos/ações automáticas/senha; OOXML sem macro, objeto OLE/ActiveX, vínculo externo,
+   DOCTYPE/ENTITY e zip bomb; imagem decodificada e **reencodada** (remove metadados e payloads escondidos).
+2. `extracao.py`: texto oculto (`vanish`, abas ocultas, caracteres invisíveis/tag characters) é descartado.
+3. `guardrail.py`: prompt injection indireta — regras determinísticas + classificador LLM (Gemini, com Groq de reserva),
+   fail-closed (erro do classificador = arquivo recusado). Senhas/chaves são mascaradas antes de qualquer envio.
+   Só depois de aprovado o arquivo vai para o Qdrant.
+4. `descricao_imagem.py`: agente de visão (Gemini) descreve tudo da imagem; ordens escritas na imagem a recusam.
+5. Na leitura, `buscar_documentos` filtra por cozinha/usuário no Qdrant, descarta trechos suspeitos e entrega o
+   conteúdo ao modelo marcado como dado de terceiros.
+
+Qdrant: uma coleção (`inventra_documentos`) com o campo `tipo` no payload (um índice para todos os formatos, filtrável
+por `tipo`) e índices em `kitchen_id`, `user_id`, `arquivo_id`, `tipo`, `compartilhado` e `ordem`. Cada arquivo vira
+trechos de ~1000 caracteres (150 de sobreposição; tabelas repetem o cabeçalho). Reenviar o mesmo arquivo substitui o anterior.
+
+Limites conhecidos: não há antivírus por assinatura de malware (é lista de permitidos + validação estrutural);
+PDF escaneado sem texto é recusado (envie como imagem); `.doc/.xls/.ppt` antigos e arquivos compactados são recusados.
+
 ## Aprovação
 
 1. Proposta criada por ferramenta do agente ou `POST /approvals`.
@@ -225,7 +259,7 @@ Quem pode **propor** o quê (chat ou `POST /approvals`; fora disso, 403):
 estoquista → lotes, entradas, saídas, ajustes, inventários e contagens; comprador →
 requisições e fornecedores; supervisor → tudo, inclusive produtos. O mapa fica em
 `ROLE_OPERATIONS` (`domain.py`) e aparece em `GET /queries/capabilities` (`allowed_roles`).
-A API Spring continua aplicando as próprias permissões na execução.
+A API Spring continua aplicando as próprias permissões na execução. Requisições nascem em `DRAFT`; inclusão/remoção de itens exige esse estado. Cancelamento admite `DRAFT`, `UNDER_REVIEW` ou `APPROVED`.
 
 Prazo: 7 dias. Somente o solicitante confirma/rejeita; Supervisor não confirma ações alheias. Perfil atual, cozinha, hash e snapshot são revalidados. Decisões legadas de terceiros não autorizam nova execução.
 Nenhuma tool do modelo aprova ou executa. Não há exclusão física pela IAI.
@@ -255,6 +289,11 @@ a demonstração offline. Não publique o arquivo `.env` local.
 | MONGO_CONNECTION | MongoDB; não inclua credenciais no Git |
 | GEMINI_API_KEY / GROQ_API_KEY | provedores para agentes live |
 | TYPESAFE_API_KEY | TypeSafe/JEV para autorizar tools dos agentes live; falha bloqueia execução |
+| JEV_ESCOPO | `todas` obrigatório: cada leitura/proposta live é julgada individualmente; `escrita` é recusado nesta branch |
+| QDRANT_URL / QDRANT_API_KEY | serviço Qdrant para documentos; sem configuração, upload/listagem respondem 503 e o restante funciona |
+| QDRANT_COLLECTION / EMBEDDING_MODEL / EMBEDDING_DIM | `inventra_documentos`, `gemini-embedding-001`, 768; outra dimensão exige coleção compatível |
+| ARQUIVOS_MAX_BYTES / ARQUIVOS_MAX_POR_ENVIO / ARQUIVOS_MAX_POR_USUARIO / ARQUIVOS_MAX_CARACTERES | 10 MB, 10 por envio, 50 por usuário, 120 mil caracteres por arquivo |
+| ARQUIVOS_GUARDRAIL_LLM | `on` (padrão) ou `off`; controle do classificador da ingestão, independente do JEV das tools live |
 | JEV_MODEL / JEV_APPROVAL_THRESHOLD / JEV_TIMEOUT | versão `jev-1.13.0`, limiar 0.70, timeout 10 s |
 | CORS_ORIGINS | origens exatas do frontend, separadas por vírgula (padrão `http://localhost:3000,http://localhost:5173`) |
 | METRICAS_REQ_USUARIO_SEMANA / METRICAS_VALOR_RESOLUCAO_USD | premissas do `/metrics` (padrão 10 e 1.50) |
@@ -273,16 +312,24 @@ Uma falha após iniciar envio pode ser `RESULTADO_INCERTO`. A IAI não repete a 
 Reconciliação/idempotência completa entre serviços depende do backend.
 A página de aprovação está em outro repositório e não foi criada aqui.
 
+## Consolidação da main
+
+A branch `fix/human-in-the-loop` incorpora os commits `d9b3023` (#22) e `ae7155c` (#23).
+Mantém artefatos, confirmação do solicitante e paralelismo, adaptando o ponto de entrada
+`inventra/acoes.py` ao serviço durável de propostas. A remoção do HITL e a dispensa de JEV
+nas leituras não foram adotadas. O FAQ usa busca determinística autorizada e fallback literal
+se o modelo falhar, sem dispensar o gate. Detalhes em [CONSOLIDACAO_MAIN.md](CONSOLIDACAO_MAIN.md).
+
 ## Testes
 
 Validação local de 26/10/2026 após artefatos, HITL do solicitante e fan-out:
-**248 testes aprovados, 6 ignorados; cobertura de 91,42%** (baseline anterior: 90,34%).
+**394 testes aprovados, 6 ignorados; cobertura de 91,56%** (baseline da branch antes da integração: 91,42%).
 Ruff e mypy passaram. Testes externos permaneceram desativados; o teste de retomada
 Mongo entre processos é opt-in e não foi executado nesta validação.
 
 ```powershell
 .\.venv\Scripts\python.exe -m pip install -r requirements-dev.txt
-.\.venv\Scripts\python.exe -m pytest --cov=iai --cov-report=term-missing --cov-fail-under=70
+.\.venv\Scripts\python.exe -m pytest --cov=iai --cov-report=term-missing --cov-fail-under=91.42
 .\.venv\Scripts\python.exe -m ruff check iai
 .\.venv\Scripts\python.exe -m mypy iai --follow-imports=skip
 ```
