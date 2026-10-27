@@ -1,4 +1,4 @@
-"""Tools leem dados ou PEDEM uma ação (propor_*); nenhuma executa alteração de negócio."""
+"""Tools leem dados ou CRIAM PROPOSTAS; não expõem execução/decisão ao modelo."""
 
 import json
 
@@ -8,8 +8,14 @@ from pydantic import Field, ValidationError, create_model
 from pymongo.errors import PyMongoError
 
 from iai.app.core.assistant.tool_gate import protect_tool
+from iai.app.core.config import STORAGE_MODE
 from iai.app.core.infra.security import context
-from iai.app.core.inventra.acoes import SEM_HITL, solicitar_confirmacao
+from iai.app.core.inventra.acoes import solicitar_confirmacao
+from iai.app.core.inventra.approvals import (
+    get_proposal,
+    list_proposals,
+    public,
+)
 from iai.app.core.inventra.business import gateway
 from iai.app.core.inventra.domain import (
     BUY_OPERATIONS,
@@ -60,6 +66,41 @@ def consultar_inventra(**parameters) -> str:
         ).model_dump_json()
 
 
+@tool
+def consultar_solicitacoes_iai(solicitacao_id: str = "") -> str:
+    """Consulta estado e resultado de propostas no escopo autenticado; não aprova nem executa."""
+    try:
+        data = (
+            public(get_proposal(solicitacao_id, context()))
+            if solicitacao_id
+            else list_proposals(context())
+        )
+        return ToolResult(
+            ok=True,
+            code="OK",
+            message="Estado persistido; verifique source/mocked do resultado de negócio.",
+            data=data,
+            source="Mongo IAI",
+            mocked=STORAGE_MODE == "mock",
+        ).model_dump_json()
+    except HTTPException:
+        return ToolResult(
+            ok=False,
+            code="NAO_ENCONTRADO",
+            message="Solicitação não encontrada no seu escopo.",
+            source="Mongo IAI",
+            mocked=STORAGE_MODE == "mock",
+        ).model_dump_json()
+    except PyMongoError:
+        return ToolResult(
+            ok=False,
+            code="PERSISTENCIA_INDISPONIVEL",
+            message="Estado indisponível; não inferir execução.",
+            source="Mongo IAI",
+            mocked=STORAGE_MODE == "mock",
+        ).model_dump_json()
+
+
 def proposal_tool(operation):
     schema = create_model(
         f"Proposta_{operation.value}",
@@ -76,12 +117,9 @@ def proposal_tool(operation):
             return json.dumps(
                 {
                     "ok": True,
-                    "code": SEM_HITL,
+                    "code": "AGUARDANDO_APROVACAO",
                     "executed": False,
-                    "message": (
-                        "Ação validada, mas NÃO executada: a confirmação humana ainda não está "
-                        "disponível. Nenhuma alteração de negócio foi feita."
-                    ),
+                    "message": "Proposta registrada. Nenhuma alteração de negócio foi executada.",
                     "proposal": proposal,
                 },
                 default=str,
@@ -96,31 +134,37 @@ def proposal_tool(operation):
             return json.dumps(
                 {
                     "ok": False,
-                    "code": "ACAO_NAO_VALIDADA",
+                    "code": "PROPOSTA_NAO_CRIADA",
                     "executed": False,
                     "message": message,
                 },
                 ensure_ascii=False,
             )
+        except PyMongoError:
+            return '{"ok":false,"code":"PERSISTENCIA_INDISPONIVEL","executed":false,"message":"Não foi possível confirmar o registro da proposta. Consulte suas solicitações antes de repetir."}'
 
     return StructuredTool.from_function(
         prepare,
         name=f"propor_{operation.value}",
-        description=f"Pede {operation.value}. Só valida a ação; NÃO EXECUTA nada. Confirme IDs/dados; nunca invente.",
+        description=f"Prepara {operation.value} para revisão e confirmação do próprio solicitante. NÃO EXECUTA. Confirme IDs/dados; nunca invente.",
         args_schema=schema,
     )
 
 
 PROPOSAL_TOOLS = {operation: proposal_tool(operation) for operation in Operation}
-for operational_tool in [consultar_inventra, *PROPOSAL_TOOLS.values()]:
+for operational_tool in [
+    consultar_inventra,
+    consultar_solicitacoes_iai,
+    *PROPOSAL_TOOLS.values(),
+]:
     protect_tool(operational_tool)
     operational_tool.handle_validation_error = "Parâmetros incompletos ou inválidos. Consulte os IDs e peça os campos necessários; nenhuma operação foi executada."
-STOCK_TOOLS = [consultar_inventra] + [
+STOCK_TOOLS = [consultar_inventra, consultar_solicitacoes_iai] + [
     PROPOSAL_TOOLS[o] for o in Operation if o in STOCK_OPERATIONS
 ]
-BUY_TOOLS = [consultar_inventra] + [
+BUY_TOOLS = [consultar_inventra, consultar_solicitacoes_iai] + [
     PROPOSAL_TOOLS[o] for o in Operation if o in BUY_OPERATIONS
 ]
-SUPERVISOR_TOOLS = [consultar_inventra] + list(
+SUPERVISOR_TOOLS = [consultar_inventra, consultar_solicitacoes_iai] + list(
     PROPOSAL_TOOLS.values()
 )

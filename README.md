@@ -1,15 +1,15 @@
 # IAI INVENTRA
 
 FastAPI + LangChain + LangGraph para conhecimento documental, consultas operacionais e
-pedidos de alteração (validados, **ainda não executados**: o human in the loop está por implementar).
-Esta branch não altera Spring nem frontend.
+propostas de alteração confirmadas pelo próprio solicitante autenticado. Esta branch não altera Spring nem frontend.
 
 Para compreender a arquitetura, as regras essenciais e os limites reais antes de trabalhar no código,
-consulte [Contexto da IAI para outras IAs](CONTEXTO_IAI_PARA_IAS.md).
+consulte [Contexto da IAI para outras IAs](CONTEXTO_TECNICO_IA_ATUAL.md).
 
-O chat **live** usa o [gate JEV pré-execução de tools](docs/JEV_GATE.md).
-Cada chamada é registrada e julgada antes de executar; isso não substitui a confirmação
-humana das alterações de negócio (ver [Human in the loop](#human-in-the-loop-a-implementar)). Configure `TYPESAFE_API_KEY` para esse fluxo.
+O chat **live** usa o [gate JEV pré-execução de tools](iai/app/core/assistant/tool_gate.py).
+Cada chamada é registrada e validada antes de executar. `JEV_ESCOPO=escrita` (padrão)
+consulta o JEV nas propostas; `todas` inclui também as leituras. Isso não substitui a aprovação
+humana das alterações de negócio. Configure `TYPESAFE_API_KEY` para as chamadas que exigem JEV.
 O demo determinístico continua disponível sem JEV real.
 
 ## Executar localmente
@@ -36,7 +36,7 @@ Se aparecer `pg_config` ou uma exigência de compilador C++ durante a instalaç�
 verifique a versão do Python e o arquivo de requisitos: a IAI não utiliza `jq` nem
 `psycopg2-binary`, e o acesso operacional ao PostgreSQL é feito pela API Spring.
 
-Para persistir o histórico de conversas e as métricas (identidade e dados de negócio ainda simulados),
+Para persistir solicitações e histórico (identidade e dados de negócio ainda simulados),
 use `IAI_STORAGE_MODE=mongo` e `MONGO_CONNECTION` apontando para um MongoDB.
 
 ### Testar no celular (mesma rede Wi-Fi)
@@ -74,9 +74,9 @@ Não exponha os modos mock publicamente.
 
 ## Chat e consultas
 
-`POST /chat` preserva `session_id`, `user_id`, `pergunta` e resposta `{"resposta": "..."}`.
+`POST /chat` preserva `session_id`, `user_id`, `pergunta` e o campo `resposta`. A resposta agora inclui `artifacts` (zero ou um elemento) e `pending_actions` (ações persistidas para revisão).
 O `user_id` deve corresponder à identidade autenticada. `request_id` opcional pode ser
-reutilizado pelo frontend ao repetir a mesma requisição; identifica a rodada.
+reutilizado pelo frontend ao repetir a mesma requisição; é a chave da rodada para propostas.
 
 ```json
 {
@@ -87,7 +87,7 @@ reutilizado pelo frontend ao repetir a mesma requisição; identifica a rodada.
 }
 ```
 
-No demo, esse exemplo gera dois pedidos validados e **não executados**; o saldo não muda.
+No demo, esse exemplo gera duas propostas. O saldo permanece igual até aprovação.
 Esse intérprete tem cobertura limitada; compreensão geral de linguagem natural usa os
 agentes `IAI_LLM_MODE=live` e chaves Gemini/Groq. API de negócio e armazenamento podem
 continuar simulados enquanto se valida o provedor real.
@@ -95,12 +95,46 @@ continuar simulados enquanto se valida o provedor real.
 `POST /chat/audio` (multipart: `session_id`, `user_id`, `request_id` opcional e o arquivo
 `audio` em webm, ogg, mp3, m4a, mp4 ou wav, até 10 MB) transcreve a fala com Whisper
 (`whisper-large-v3-turbo`, Groq) e segue o mesmo fluxo e a mesma autenticação do `/chat`.
-Responde `{"transcricao": "...", "resposta": "..."}`. Exige `GROQ_API_KEY`; o áudio não é
+Responde com `transcricao`, `resposta`, `artifacts` e `pending_actions`. Exige `GROQ_API_KEY`; o áudio não é
 gravado, só o texto transcrito entra no histórico.
 
 `POST /queries` oferece as mesmas consultas tipadas sem depender de LLM.
 Exemplo: `{"resource":"validade","days":7}`.
 `GET /queries/capabilities` informa schemas, operações e limitações.
+
+## Artefatos e leituras paralelas
+
+O backend não renderiza gráficos nem gera HTML. `artifacts` contém no máximo uma tabela
+(`type=table`, `columns`, `rows`) ou gráfico (`type=chart`, `chart_type=bar|pie`, `labels`,
+`datasets`, `unit`). Ambos identificam `source` e `mocked`. O modelo escolhe somente formato/fonte;
+os dados são projetados dos resultados de ferramentas autorizadas desta rodada. Não há estatísticas
+sobre páginas incompletas nem comparação de quantidades com unidades incompatíveis. Pizza usa
+contagem de registros por status/categoria. Vendas e comparação entre cozinhas não são suportadas.
+
+Exemplos no demo: "Compare as quantidades em estoque em barras"; "Mostre os lotes próximos do
+vencimento com produto validade e quantidade". Consultas escalares e conceitos continuam em texto.
+A seleção live usa saída estruturada do modelo rápido; o demo usa regras limitadas e não chama LLM.
+O histórico continua textual; os artefatos não são persistidos como visualizações recuperáveis.
+
+Leituras independentes de `consultar_inventra`, `faq_retriever`, `buscar_historico` e `buscar_documentos` podem ser emitidas
+no mesmo lote e executadas com concorrência máxima de quatro. O `ToolNode` faz fan-in antes de
+retomar o especialista. Cada chamada live conserva o gate; leituras consultam o JEV com `JEV_ESCOPO=todas`. Evidências
+são uma fotografia anterior ao lote, e permissões de uso único permanecem isoladas por contexto.
+Lotes com proposta são processados uma etapa por vez; criação, confirmação e execução são sequenciais.
+Falhas de fontes complementares podem produzir resposta parcial, sem executar a chamada rejeitada.
+
+`pending_actions` é separado dos artefatos visuais e contém ID, hash, operação, parâmetros,
+justificativa, estado, prazo e snapshot dos alvos. Confirme com o próprio usuário autenticado:
+
+```http
+POST /approvals/{id}/decision
+Authorization: Bearer <token atual do solicitante>
+Content-Type: application/json
+```
+
+```json
+{"decision":"approve","proposal_hash":"<hash retornado na proposta>"}
+```
 
 ## Tools por agente
 
@@ -111,14 +145,14 @@ propor cada operação (`ROLE_OPERATIONS`) estão em `GET /queries/capabilities`
 | Agente | Tools |
 |---|---|
 | Roteador | `buscar_historico` |
-| FAQ | sem tools: o nó `responder_faq` busca no FAQ em código e o modelo só redige (se falhar, devolve o texto literal do FAQ) |
-| Estoquista | `consultar_inventra`, `buscar_historico`, `buscar_documentos`, `faq_retriever` + propor: criar lote, registrar entrada, registrar saída, ajustar estoque, registrar inventário, registrar contagem, alterar contagem |
-| Comprador | as mesmas de consulta/histórico/documentos/FAQ + propor: criar requisição, adicionar/remover item, cancelar requisição, cadastrar/desativar fornecedor |
+| FAQ | `faq_retriever` |
+| Estoquista | `consultar_inventra`, `consultar_solicitacoes_iai`, `buscar_historico`, `faq_retriever` + propor: criar lote, registrar entrada, registrar saída, ajustar estoque, registrar inventário, registrar contagem, alterar contagem |
+| Comprador | as mesmas de consulta/histórico/FAQ + propor: criar requisição, adicionar/remover item, cancelar requisição, cadastrar/desativar fornecedor |
 | Supervisor | todas as anteriores + propor: criar/editar/desativar produto |
 
 `consultar_inventra` é uma única tool com o parâmetro `resource` (produtos, estoque, lotes,
-validade, fornecedores, requisições, inventários, alertas, catálogos etc.). Nenhuma tool executa:
-as `propor_*` só validam o pedido e respondem que nada foi executado.
+validade, fornecedores, requisições, inventários, alertas, catálogos etc.). Nenhuma tool aprova
+ou executa: as `propor_*` só criam propostas.
 
 ## Integração com a API Spring e com agentes externos (MCP)
 
@@ -133,7 +167,7 @@ O token fica só no contexto da requisição (não entra em prompt, histórico o
 | Tool (agente) | Endpoints consumidos |
 |---|---|
 | `consultar_inventra` (todos) | `GET /api/products`, `/api/suppliers`, `/api/stock-batches` (+ `/expiring-soon`, `/low-stock`), `/api/products/{id}/kitchen-parameters`, `/api/products/{id}/suppliers`, `/api/requisitions` (+ `/{id}/items`), `/api/inventories` (+ `/{id}/counts`), `/api/alerts`, `/api/categories`, `/api/units`, `/api/kitchens` |
-| `propor_*` (estoquista, comprador, supervisor) | hoje só validam (nada é gravado nem executado). Quando o HITL existir, a execução chamará `POST/PUT/PATCH` em `/api/products`, `/api/suppliers`, `/api/stock-batches` (`restock`, `consume`, `adjust`), `/api/requisitions` (`items`, `cancel`) e `/api/inventories` (`counts`) |
+| `propor_*` (estoquista, comprador, supervisor) | só criam proposta no Mongo da IAI; depois da aprovação, a execução chama `POST/PUT/PATCH` em `/api/products`, `/api/suppliers`, `/api/stock-batches` (`restock`, `consume`, `adjust`), `/api/requisitions` (`items`, `cancel`) e `/api/inventories` (`counts`) |
 
 **Erros:** a integração nunca derruba o agente. API fora do ar, timeout, status inesperado ou
 resposta inválida viram um resultado com código (`SERVICO_INDISPONIVEL`, `RESPOSTA_INVALIDA`,
@@ -154,9 +188,10 @@ subir a API. O servidor (`iai/app/extras/mcp_server.py`) usa transporte **stdio*
 processo e conversa por entrada/saída padrão (não há porta nem URL).
 
 - **Identidade:** vem de `IAI_MCP_TOKEN` (JWT do Spring), validado como no `/chat`. Cada
-  perfil vê só as tools do seu agente (estoquista 10, comprador 9, supervisor 19) e a regra
+  perfil vê só as tools do seu agente (estoquista 11, comprador 10, supervisor 20) e a regra
   `ROLE_OPERATIONS` continua valendo.
-- **Nada executa:** as `propor_*` só validam o pedido (a confirmação humana ainda não existe).
+- **Nada executa:** as `propor_*` só criam propostas; a aprovação continua em `/approvals`.
+  Cada chamada de tool é uma rodada nova, então repetir a mesma proposta cria outra proposta.
 - **Logs** vão para o stderr; o stdout é o canal do protocolo (nunca use `print`).
 
 Configuração do Cursor (`.cursor/mcp.json`) ou do Cline (`cline_mcp_settings.json`), com
@@ -213,26 +248,23 @@ trechos de ~1000 caracteres (150 de sobreposição; tabelas repetem o cabeçalho
 Limites conhecidos: não há antivírus por assinatura de malware (é lista de permitidos + validação estrutural);
 PDF escaneado sem texto é recusado (envie como imagem); `.doc/.xls/.ppt` antigos e arquivos compactados são recusados.
 
-## Human in the loop (a implementar)
+## Aprovação
 
-O fluxo antigo de aprovação (coleção `approvals`, rotas `/approvals`, decisão, execução,
-prazo de 7 dias) foi **removido**. Hoje as `propor_*` só validam o pedido e devolvem "não
-executado". Quem for implementar o HITL parte de **um único ponto**:
+1. Proposta criada por ferramenta do agente ou `POST /approvals`.
+2. O próprio solicitante vê `GET /approvals/inbox`, restrito às suas pendências na cozinha autenticada.
+3. O solicitante envia `POST /approvals/{id}/decision` com Bearer atual, decisão e hash da proposta.
+4. Execução única quando disponível. Resultado mock continua explicitamente identificado.
+5. Solicitante acompanha `GET /approvals/{id}` ou listagem de suas solicitações.
 
-`iai/app/core/inventra/acoes.py` → `solicitar_confirmacao(action, justification, ctx)`
+Quem pode **propor** o quê (chat ou `POST /approvals`; fora disso, 403):
+estoquista → lotes, entradas, saídas, ajustes, inventários e contagens; comprador →
+requisições e fornecedores; supervisor → tudo, inclusive produtos. O mapa fica em
+`ROLE_OPERATIONS` (`domain.py`) e aparece em `GET /queries/capabilities` (`allowed_roles`).
+A API Spring continua aplicando as próprias permissões na execução. Requisições nascem em `DRAFT`; inclusão/remoção de itens exige esse estado. Cancelamento admite `DRAFT`, `UNDER_REVIEW` ou `APPROVED`.
 
-- Já pronto e reaproveitável: `snapshot()` (confere perfil, IDs e estado dos registros),
-  `domain.Action` / `ROLE_OPERATIONS` (operações e quem pode pedir cada uma) e
-  `business.gateway().execute(...)` (executa no Spring ou no mock com o JWT do solicitante).
-- Falta: guardar a ação pendente, pedir a confirmação a uma pessoa, revalidar e executar
-  UMA vez, e devolver ao agente o estado real. O passo a passo está no docstring do arquivo.
-- Textos ao usuário: `assistant/respostas.py` (`resposta_de_propostas`), prompts em
-  `assistant/prompts.py` ("PEDIDOS DE AÇÃO") e FAQ em `iai/data/faq_inventra.jsonl`.
-
-Quem pode **pedir** o quê (fora disso, 403): estoquista → lotes, entradas, saídas, ajustes,
-inventários e contagens; comprador → requisições e fornecedores; supervisor → tudo, inclusive
-produtos. O mapa fica em `ROLE_OPERATIONS` (`domain.py`) e aparece em
-`GET /queries/capabilities` (`allowed_roles`). Não há exclusão física pela IAI.
+Prazo: 7 dias. Somente o solicitante confirma/rejeita; Supervisor não confirma ações alheias. Perfil atual, cozinha, hash e snapshot são revalidados. Decisões legadas de terceiros não autorizam nova execução.
+Nenhuma tool do modelo aprova ou executa. Não há exclusão física pela IAI.
+Operações em itens/lotes distintos são propostas independentes, sem atomicidade de grupo.
 
 ## Modos reais e dependências
 
@@ -258,12 +290,12 @@ a demonstração offline. Não publique o arquivo `.env` local.
 | MONGO_CONNECTION | MongoDB; não inclua credenciais no Git |
 | GEMINI_API_KEY / GROQ_API_KEY | provedores para agentes live |
 | TYPESAFE_API_KEY | TypeSafe/JEV para autorizar tools dos agentes live; falha bloqueia execução |
-| JEV_ESCOPO | `escrita` (padrão): o JEV julga só `propor_*`; `todas`: julga qualquer tool |
+| JEV_ESCOPO | `escrita` (padrão): JEV nas propostas; `todas`: também nas leituras. Ambos mantêm as validações locais do gate |
+| QDRANT_URL / QDRANT_API_KEY | serviço Qdrant para documentos; sem configuração, upload/listagem respondem 503 e o restante funciona |
+| QDRANT_COLLECTION / EMBEDDING_MODEL / EMBEDDING_DIM | `inventra_documentos`, `gemini-embedding-001`, 768; outra dimensão exige coleção compatível |
+| ARQUIVOS_MAX_BYTES / ARQUIVOS_MAX_POR_ENVIO / ARQUIVOS_MAX_POR_USUARIO / ARQUIVOS_MAX_CARACTERES | 10 MB, 10 por envio, 50 por usuário, 120 mil caracteres por arquivo |
+| ARQUIVOS_GUARDRAIL_LLM | `on` (padrão) ou `off`; controle do classificador da ingestão, independente do JEV das tools live |
 | JEV_MODEL / JEV_APPROVAL_THRESHOLD / JEV_TIMEOUT | versão `jev-1.13.0`, limiar 0.70, timeout 10 s |
-| QDRANT_URL / QDRANT_API_KEY | cluster do Qdrant Cloud para os documentos; sem eles `/arquivos` responde 503 e a IA segue normal |
-| QDRANT_COLLECTION / EMBEDDING_MODEL / EMBEDDING_DIM | coleção (`inventra_documentos`), embedding Gemini (`gemini-embedding-001`) e dimensão (768); mudar a dimensão exige outra coleção |
-| ARQUIVOS_MAX_BYTES / ARQUIVOS_MAX_POR_ENVIO / ARQUIVOS_MAX_POR_USUARIO / ARQUIVOS_MAX_CARACTERES | limites (10 MB, 10 arquivos por envio, 50 por usuário, 120 mil caracteres indexados por arquivo) |
-| ARQUIVOS_GUARDRAIL_LLM | `on` (padrão) ou `off`: classificador LLM de prompt injection nos arquivos |
 | CORS_ORIGINS | origens exatas do frontend, separadas por vírgula (padrão `http://localhost:3000,http://localhost:5173`) |
 | METRICAS_REQ_USUARIO_SEMANA / METRICAS_VALOR_RESOLUCAO_USD | premissas do `/metrics` (padrão 10 e 1.50) |
 
@@ -271,19 +303,34 @@ API real não aceita identidade mock. JWT é validado por `GET /api/users/me`, s
 decodificação não verificada e sem segredo de assinatura compartilhado. Tokens permanecem
 apenas no contexto HTTP; não são colocados em prompts, checkpoints ou histórico.
 
-Quando o HITL existir, a execução real como outro solicitante dependerá de delegação ainda
-ausente no Spring (não se usa o JWT de quem confirma no lugar do solicitante).
-Edição de contagem e remoção lógica de item também têm dependências externas.
+A confirmação usa a identidade do próprio solicitante e seu JWT fresco, sem delegação de outro usuário.
+A decisão tenta executar imediatamente; `POST /approvals/{id}/execute` permite retomar uma aprovação
+válida após indisponibilidade anterior ao envio. A API Spring volta a aplicar suas permissões.
+Edição de contagem e remoção lógica de item ainda têm dependências externas.
 Não inventamos endpoints para essas capacidades.
 
 Uma falha após iniciar envio pode ser `RESULTADO_INCERTO`. A IAI não repete a escrita.
 Reconciliação/idempotência completa entre serviços depende do backend.
+A página de aprovação está em outro repositório e não foi criada aqui.
+
+## Consolidação da main
+
+A branch `fix/human-in-the-loop` incorpora os commits `d9b3023` (#22) e `ae7155c` (#23).
+Mantém artefatos, confirmação do solicitante e paralelismo, adaptando o ponto de entrada
+`inventra/acoes.py` ao serviço durável de propostas. Na revisão do PR #24, foi restaurado
+`JEV_ESCOPO=escrita` como padrão, com `todas` disponível. O FAQ usa busca determinística autorizada e fallback literal
+se o modelo falhar, sem dispensar o gate. Detalhes em [CONSOLIDACAO_MAIN.md](CONSOLIDACAO_MAIN.md).
 
 ## Testes
 
+Validação local de 26/10/2026 após artefatos, HITL do solicitante e fan-out:
+**394 testes aprovados, 6 ignorados; cobertura de 91,56%** (baseline da branch antes da integração: 91,42%).
+Ruff e mypy passaram. Testes externos permaneceram desativados; o teste de retomada
+Mongo entre processos é opt-in e não foi executado nesta validação.
+
 ```powershell
 .\.venv\Scripts\python.exe -m pip install -r requirements-dev.txt
-.\.venv\Scripts\python.exe -m pytest --cov=iai --cov-report=term-missing --cov-fail-under=70
+.\.venv\Scripts\python.exe -m pytest --cov=iai --cov-report=term-missing --cov-fail-under=91.42
 .\.venv\Scripts\python.exe -m ruff check iai
 .\.venv\Scripts\python.exe -m mypy iai --follow-imports=skip
 ```
@@ -294,7 +341,8 @@ Testes opcionais, somente com serviços explicitamente disponibilizados:
 
 - `RUN_LLM_TESTS=1` e chaves reais: FAQ pelos provedores, negócio/Mongo continuam mockados.
 - `RUN_MONGO_TESTS=1` e `MONGO_TEST_CONNECTION`: persistência e decisão atômica em base
-  temporária exclusiva `iai_test_<uuid>`; não usa `dbIAI`.
+  temporária exclusiva `iai_test_<uuid>`, incluindo preparação e confirmação em processos
+  separados; não usa `dbIAI`.
 - `RUN_SPRING_TESTS=1` e `SPRING_TEST_TOKEN`: leitura de identidade/catálogo real, sem escrita.
 - `RUN_JEV_TESTS=1` e `TYPESAFE_API_KEY`: contrato real de decisões TypeSafe, sem executar tools de negócio.
 

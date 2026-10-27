@@ -51,7 +51,13 @@ VALORES = {
 }
 
 ESTADOS = {
-    "NAO_EXECUTADA_SEM_CONFIRMACAO_HUMANA": "não executada (confirmação humana ainda não disponível)",
+    "AGUARDANDO_APROVACAO": "aguardando sua confirmação",
+    "APROVADA_PENDENTE_INTEGRACAO": "confirmada; aguardando integração",
+    "CONCLUIDA": "executada",
+    "RECUSADA": "recusada",
+    "EXPIRADA": "expirada",
+    "FALHOU": "falhou",
+    "RESULTADO_INCERTO": "resultado incerto; não repetir automaticamente",
 }
 
 
@@ -82,23 +88,30 @@ def descrever_proposta(proposta: dict) -> str:
         rotulo = ROTULOS_PARAMETRO.get(chave, chave)
         linhas.append(f"- {rotulo}: {_formatar_valor(chave, valor, proposta)}")
     estado = proposta.get("status", "")
-    linhas.append(f"- Estado: {ESTADOS.get(estado, estado.lower().replace('_', ' '))}")
+    linhas.append(
+        f"- Estado: {estado} — {ESTADOS.get(estado, estado.lower().replace('_', ' '))}"
+    )
     return "\n".join(linhas)
 
 
 def resposta_de_propostas(propostas: list[dict], falhas: list[str]) -> str:
     """Texto final quando o turno validou pedidos de ação (ordem cronológica).
 
-    HITL: quando a confirmação humana existir, é aqui que o texto muda (ex.: "aguardando sua confirmação").
+    A revisão legível complementa pending_actions; não altera o payload persistido.
     """
     blocos = [descrever_proposta(p) for p in propostas]
-    texto = "\n\n".join(blocos)
+    texto = (
+        "\n\n".join(blocos)
+        + "\nSomente as propostas listadas foram registradas; outros itens ou dados ainda não confirmados não foram propostos."
+    )
     texto += (
-        "\n\nNada foi alterado: a confirmação humana ainda não está disponível, "
-        "então esse pedido não foi executado."
+        "\n\nNada foi alterado nesta conversa. Revise cada proposta e confirme ou rejeite "
+        "com sua própria identidade; a execução depende da confirmação e revalidação."
     )
     if falhas:
-        texto += "\n\nNão consegui concluir:\n" + "\n".join(f"- {f}" for f in falhas)
+        texto += "\n\nEtapas não concluídas — Não consegui concluir:\n" + "\n".join(
+            f"- {f}" for f in falhas
+        )
     return texto
 
 

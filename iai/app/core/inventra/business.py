@@ -1,4 +1,4 @@
-"""Adaptadores de negócio. Só o futuro HITL (core/inventra/acoes.py) deve chamar execute()."""
+"""Adaptadores de negócio. Somente o serviço de confirmação humana deve chamar execute()."""
 
 from collections import Counter
 from datetime import timedelta

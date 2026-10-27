@@ -176,3 +176,41 @@ def test_config_reads_app_env_preserving_precedence(
         monkeypatch.delenv("TYPESAFE_API_KEY")
     loaded = runpy.run_path(str(config_path))
     assert loaded["TYPESAFE_API_KEY"].get_secret_value() == expected
+
+
+@pytest.mark.parametrize("scope", ["escrita", "todas", "invalido"])
+def test_config_validates_scope(scope):
+    import os
+    import subprocess
+    import sys
+
+    env = dict(os.environ, JEV_ESCOPO=scope)
+    result = subprocess.run(
+        [
+            sys.executable,
+            "-c",
+            "from iai.app.core.config import JEV_ESCOPO; print(JEV_ESCOPO)",
+        ],
+        env=env,
+        capture_output=True,
+        text=True,
+        check=False,
+        timeout=15,
+    )
+    if scope == "invalido":
+        assert result.returncode != 0
+        assert "JEV_ESCOPO inválido" in result.stderr
+    else:
+        assert result.returncode == 0, result.stderr
+        assert result.stdout.strip() == scope
+
+
+def test_config_defaults_to_write_scope_without_dotenv(tmp_path, monkeypatch):
+    config_path = tmp_path / "iai" / "app" / "core" / "config.py"
+    config_path.parent.mkdir(parents=True)
+    config_path.write_text(
+        (Path(judge.__file__).parents[1] / "config.py").read_text(encoding="utf-8"),
+        encoding="utf-8",
+    )
+    monkeypatch.delenv("JEV_ESCOPO", raising=False)
+    assert runpy.run_path(str(config_path))["JEV_ESCOPO"] == "escrita"

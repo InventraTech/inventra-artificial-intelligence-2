@@ -85,10 +85,12 @@ def _estado_faq(pergunta):
 
 
 def _texto_final(resultado):
-    return resultado["messages"][-1]["content"]
+    return resultado["messages"][-1].content
 
 
-def test_rota_faq_usa_o_texto_do_modelo_com_os_trechos_encontrados(monkeypatch):
+def test_rota_faq_usa_o_texto_do_modelo_com_os_trechos_encontrados(
+    monkeypatch, faq_context
+):
     from langchain_core.messages import AIMessage
 
     from iai.app.core.assistant import graph
@@ -112,7 +114,9 @@ def test_rota_faq_usa_o_texto_do_modelo_com_os_trechos_encontrados(monkeypatch):
     )
 
 
-def test_rota_faq_nunca_falha_quando_o_modelo_cai_e_devolve_o_faq_literal(monkeypatch):
+def test_rota_faq_nunca_falha_quando_o_modelo_cai_e_devolve_o_faq_literal(
+    monkeypatch, faq_context
+):
     from iai.app.core.assistant import graph
     from iai.app.core.tools.faq import buscar_faq
 
@@ -127,7 +131,7 @@ def test_rota_faq_nunca_falha_quando_o_modelo_cai_e_devolve_o_faq_literal(monkey
     assert "SECRETO" not in str(resultado)
 
 
-def test_rota_faq_sem_trecho_nao_chama_o_modelo_nem_inventa(monkeypatch):
+def test_rota_faq_sem_trecho_nao_chama_o_modelo_nem_inventa(monkeypatch, faq_context):
     from iai.app.core.assistant import graph
 
     class ModeloProibido:
@@ -139,15 +143,88 @@ def test_rota_faq_sem_trecho_nao_chama_o_modelo_nem_inventa(monkeypatch):
 
     assert _texto_final(resultado) == graph.SEM_FAQ
     assert "faq:respondido" not in resultado["agentes_chamados"]
+    assert "jev:concluido" not in resultado["agentes_chamados"]
 
 
-def test_rota_faq_com_base_invalida_responde_sem_quebrar(monkeypatch):
+def test_rota_faq_com_base_invalida_responde_sem_quebrar(monkeypatch, faq_context):
     from iai.app.core.assistant import graph
 
     def base_quebrada(pergunta, limite=4):
         raise OSError("sem arquivo")
 
-    monkeypatch.setattr(graph, "buscar_faq", base_quebrada)
+    from iai.app.core.tools import faq
+
+    monkeypatch.setattr(faq, "buscar_faq", base_quebrada)
     resultado = graph.responder_faq(_estado_faq("O que é o OCR?"), config={})
 
     assert "indisponível" in _texto_final(resultado)
+
+
+@pytest.fixture
+def faq_context(monkeypatch):
+    from iai.app.core.assistant import judge
+    from iai.app.core.assistant.tool_gate import live_tool_scope
+    from iai.app.core.infra.security import current_context
+    from tests_helpers import context_for, jev_evaluation
+
+    marker = current_context.set(context_for())
+    monkeypatch.setattr(
+        judge,
+        "evaluate",
+        lambda state: jev_evaluation(
+            fields=state["tool"]["schema"].get("properties", {})
+        ),
+    )
+    try:
+        with live_tool_scope():
+            yield
+    finally:
+        current_context.reset(marker)
+
+
+def test_faq_sem_jev_nao_busca_documentacao_nem_usa_fallback(monkeypatch, faq_context):
+    from iai.app.core.assistant import graph, judge
+    from iai.app.core.tools import faq
+
+    def forbidden(*args, **kwargs):
+        raise AssertionError("Nenhuma busca deve acontecer antes do JEV")
+
+    def unavailable(state):
+        raise judge.JevUnavailable("TEST_UNAVAILABLE")
+
+    monkeypatch.setattr(judge, "evaluate", unavailable)
+    monkeypatch.setattr(faq, "buscar_faq", forbidden)
+    result = graph.responder_faq(_estado_faq("Qual o suporte?"), config={})
+    assert result["jev_halt"] and "indisponível" in _texto_final(result)
+    assert "faq:respondido" not in result["agentes_chamados"]
+    assert all(c["status"] == "REJECT" for c in result["jev_calls"].values())
+
+
+def test_faq_repair_decision_never_becomes_documentary_evidence(
+    monkeypatch, faq_context
+):
+    from types import SimpleNamespace
+
+    from iai.app.core.assistant import graph, judge
+    from tests_helpers import jev_evaluation
+
+    generations = []
+    monkeypatch.setattr(
+        judge,
+        "evaluate",
+        lambda state: jev_evaluation(
+            failed={"arguments_grounded": 0.1},
+            route="agent_repair",
+            fields=["question"],
+        ),
+    )
+    monkeypatch.setattr(
+        graph,
+        "llm_especialista",
+        SimpleNamespace(invoke=lambda *args, **kwargs: generations.append(args)),
+    )
+    result = graph.responder_faq(_estado_faq("Qual o contato do suporte?"), config={})
+    assert not generations
+    assert result["jev_halt"] and "Reformule" in _texto_final(result)
+    assert all(c["status"] == "RETRY_SPECIALIST" for c in result["jev_calls"].values())
+    assert "faq:respondido" not in result["agentes_chamados"]

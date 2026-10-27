@@ -1,6 +1,6 @@
 import asyncio
 import logging
-from contextlib import asynccontextmanager
+from contextlib import asynccontextmanager, suppress
 
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
@@ -15,14 +15,22 @@ from iai.app.core.config import (
     STORAGE_MODE,
 )
 from iai.app.core.infra.storage import get_db, initialize_storage
-from iai.app.core.routes import arquivos, chat, metrics, queries
+from iai.app.core.inventra.approvals import expire_pending
+from iai.app.core.routes import approvals, arquivos, chat, metrics, queries
 
 # Sem isso o Python só mostra WARNING+: as decisões do JEV (INFO) nunca chegavam aos logs do Render.
-logging.basicConfig(
-    level=logging.INFO, format="%(levelname)s:%(name)s: %(message)s"
-)
+logging.basicConfig(level=logging.INFO, format="%(levelname)s:%(name)s: %(message)s")
 for _barulhento in ("httpx", "httpcore", "pymongo", "urllib3"):
     logging.getLogger(_barulhento).setLevel(logging.WARNING)
+
+
+async def expiration_worker():
+    while True:
+        try:
+            await asyncio.to_thread(expire_pending)
+        except PyMongoError:
+            pass
+        await asyncio.sleep(30)
 
 
 @asynccontextmanager
@@ -31,13 +39,19 @@ async def lifespan(app):
         await asyncio.to_thread(initialize_storage)
     except PyMongoError:
         pass
-    yield
+    task = asyncio.create_task(expiration_worker())
+    try:
+        yield
+    finally:
+        task.cancel()
+        with suppress(asyncio.CancelledError):
+            await task
 
 
 app = FastAPI(
     title="IAI - Inteligência Artificial do Inventra",
     version="0.2.0",
-    description="Consultas e ações validadas. A confirmação humana (HITL) ainda não está implementada. Modos mock são explicitamente identificados.",
+    description="Consultas, documentos, artefatos e ações confirmadas pelo solicitante. Modos mock são explicitamente identificados.",
     lifespan=lifespan,
 )
 if CORS_ORIGINS:
@@ -49,6 +63,7 @@ if CORS_ORIGINS:
         allow_headers=["Authorization", "Content-Type"],
     )
 app.include_router(chat.router)
+app.include_router(approvals.router)
 app.include_router(arquivos.router)
 app.include_router(queries.router)
 app.include_router(metrics.router)

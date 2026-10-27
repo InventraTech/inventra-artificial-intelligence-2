@@ -35,7 +35,7 @@ def capabilities(ctx: Authenticated):
         "operations": [
             {
                 "operation": operation.value,
-                "executes": False,  # HITL: troque quando a execução existir
+                "requires_approval": True,
                 "allowed_roles": [
                     role for role, ops in ROLE_OPERATIONS.items() if operation in ops
                 ],
@@ -48,6 +48,8 @@ def capabilities(ctx: Authenticated):
             }
             for operation in Operation
         ],
+        "approval_days": 7,
+        "confirmation_actor": "requester",
         "physical_delete": False,
     }
 

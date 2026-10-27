@@ -34,12 +34,6 @@ def turn(*calls):
     return AIMessage(content="", tool_calls=list(calls))
 
 
-@pytest.fixture(autouse=True)
-def escopo_todas(monkeypatch):
-    """Os testes abaixo exercitam o juiz em qualquer tool; o escopo padrão tem testes próprios."""
-    monkeypatch.setattr(tool_gate, "JEV_ESCOPO", "todas")
-
-
 @pytest.fixture
 def authenticated():
     marker = current_context.set(replace(context_for(), turn_id="jev-test-turn"))
@@ -242,7 +236,9 @@ def test_unknown_tool_is_rejected_before_evaluation(monkeypatch, authenticated, 
     ]
 
 
-def test_judged_action_request_is_validated_but_never_executed(monkeypatch, authenticated):
+def test_judged_action_request_is_validated_but_never_executed(
+    monkeypatch, authenticated
+):
     approve(monkeypatch)
     proposal = PROPOSAL_TOOLS[Operation.CONSUME]
     result = invoke(
@@ -408,6 +404,7 @@ def test_all_live_agents_have_the_gate():
         graph.estoquista_app,
         graph.comprador_app,
         graph.supervisor_app,
+        graph.faq_app,
     ):
         assert any(
             "JevToolGate.after_model" in name for name in agent.get_graph().nodes
@@ -450,43 +447,40 @@ def test_tool_reported_error_is_not_a_successful_execution(monkeypatch, authenti
     assert record["decision"] == "APPROVE" and record["status"] == "FAILED"
 
 
-# ---- escopo padrão: o JEV julga o que escreve (propor_*); leitura segue só o gate determinístico ----
+# ---- Escopo todas: leituras e propostas exigem JEV individual ----
 
 
-def test_leitura_nao_consulta_o_juiz_no_escopo_escrita(
+def test_leitura_continua_consultando_o_juiz_individualmente(
     monkeypatch, authenticated, lookup
 ):
-    monkeypatch.setattr(tool_gate, "JEV_ESCOPO", "escrita")
     lookup, executions = lookup
 
-    def nunca(state):
-        raise AssertionError("leitura não deve chamar o JEV")
-
-    monkeypatch.setattr(judge, "evaluate", nunca)
+    seen = approve(monkeypatch)
     result = invoke(make_agent([turn(call()), AIMessage(content="ok")], [lookup]))
 
     registro = next(iter(result["jev_calls"].values()))
     assert executions == ["arroz"] and registro["status"] == "EXECUTED"
-    assert registro["jev_dispensado"] == "leitura"
+    assert len(seen) == 1 and "jev_dispensado" not in registro
 
 
-def test_leitura_funciona_mesmo_sem_chave_do_jev(monkeypatch, authenticated, lookup):
+def test_leitura_sem_chave_do_jev_permanece_bloqueada(
+    monkeypatch, authenticated, lookup
+):
     from pydantic import SecretStr
 
-    monkeypatch.setattr(tool_gate, "JEV_ESCOPO", "escrita")
     monkeypatch.setattr(judge, "TYPESAFE_API_KEY", SecretStr(""))
     lookup, executions = lookup
 
     invoke(make_agent([turn(call()), AIMessage(content="ok")], [lookup]))
 
-    assert executions == ["arroz"]
+    assert executions == []
 
 
 def test_leitura_com_argumento_invalido_continua_barrada(
     monkeypatch, authenticated, lookup
 ):
-    monkeypatch.setattr(tool_gate, "JEV_ESCOPO", "escrita")
     lookup, executions = lookup
+    approve(monkeypatch)
 
     result = invoke(
         make_agent([turn(call(args={}, identifier=str(i))) for i in range(3)], [lookup])
@@ -498,8 +492,9 @@ def test_leitura_com_argumento_invalido_continua_barrada(
     )
 
 
-def test_proposta_sempre_passa_pelo_juiz_no_escopo_escrita(monkeypatch, authenticated):
-    monkeypatch.setattr(tool_gate, "JEV_ESCOPO", "escrita")
+@pytest.mark.parametrize("scope", ["escrita", "todas"])
+def test_proposta_sempre_passa_pelo_juiz(monkeypatch, authenticated, scope):
+    monkeypatch.setattr(tool_gate, "JEV_ESCOPO", scope)
     seen = approve(monkeypatch)
     proposal = PROPOSAL_TOOLS[Operation.CONSUME]
 
@@ -522,10 +517,13 @@ def test_proposta_sempre_passa_pelo_juiz_no_escopo_escrita(monkeypatch, authenti
     assert len(seen) == 1
 
 
-def test_proposta_sem_chave_do_jev_continua_bloqueada(monkeypatch, authenticated):
+@pytest.mark.parametrize("scope", ["escrita", "todas"])
+def test_proposta_sem_chave_do_jev_continua_bloqueada(
+    monkeypatch, authenticated, scope
+):
     from pydantic import SecretStr
 
-    monkeypatch.setattr(tool_gate, "JEV_ESCOPO", "escrita")
+    monkeypatch.setattr(tool_gate, "JEV_ESCOPO", scope)
     monkeypatch.setattr(judge, "TYPESAFE_API_KEY", SecretStr(""))
     proposal = PROPOSAL_TOOLS[Operation.CONSUME]
 
@@ -589,3 +587,64 @@ def test_recusa_explica_o_motivo_em_vez_de_mensagem_generica(
     assert executions == []
     assert "nome completo" in result["messages"][-1].content
     assert "Essa etapa não foi realizada" in result["messages"][-1].content
+
+
+# ---- Escopo escrita: leituras mantêm o gate local, sem avaliar no JEV ----
+
+
+def test_write_scope_read_executes_without_judge(monkeypatch, authenticated, lookup):
+    monkeypatch.setattr(tool_gate, "JEV_ESCOPO", "escrita")
+
+    def unexpected_evaluation(state):
+        pytest.fail("Leitura no escopo escrita não deve chamar o JEV")
+
+    monkeypatch.setattr(judge, "evaluate", unexpected_evaluation)
+    lookup, executions = lookup
+    result = invoke(make_agent([turn(call()), AIMessage(content="ok")], [lookup]))
+    record = next(iter(result["jev_calls"].values()))
+    assert executions == ["arroz"]
+    assert record["status"] == "EXECUTED"
+    assert record["jev_dispensado"] == "leitura"
+
+
+@pytest.mark.parametrize("args", [{}, {"product": "arroz", "undeclared": True}])
+def test_write_scope_read_rejects_invalid_schema(
+    monkeypatch, authenticated, lookup, args
+):
+    monkeypatch.setattr(tool_gate, "JEV_ESCOPO", "escrita")
+    seen = approve(monkeypatch)
+    lookup, executions = lookup
+    result = invoke(
+        make_agent(
+            [
+                turn(call(args=args, identifier=str(i)))
+                for i in range(judge.MAX_ATTEMPTS)
+            ],
+            [lookup],
+        )
+    )
+    assert executions == [] and seen == []
+    assert all(
+        record["failed_checks"] == ["SCHEMA_INVALID"]
+        for record in result["jev_calls"].values()
+    )
+    assert list(result["jev_calls"].values())[-1]["decision"] == "REJECT"
+
+
+def test_write_scope_read_still_blocks_secrets(monkeypatch, authenticated, lookup):
+    monkeypatch.setattr(tool_gate, "JEV_ESCOPO", "escrita")
+    seen = approve(monkeypatch)
+    lookup, executions = lookup
+    result = invoke(
+        make_agent(
+            [
+                turn(
+                    call(args={"product": tool_gate.context().token.get_secret_value()})
+                )
+            ],
+            [lookup],
+        )
+    )
+    assert executions == [] and seen == []
+    record = next(iter(result["jev_calls"].values()))
+    assert record["failed_checks"] == ["SECRET_IN_ARGUMENTS"]

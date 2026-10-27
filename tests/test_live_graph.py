@@ -8,7 +8,7 @@ from langchain.agents import create_agent
 from langchain_core.language_models.fake_chat_models import FakeMessagesListChatModel
 from langchain_core.messages import AIMessage
 
-from iai.app.core.assistant import graph, judge, tool_gate
+from iai.app.core.assistant import graph, judge
 from iai.app.core.assistant.tool_gate import JevToolGate
 from iai.app.core.infra.security import current_context
 from iai.app.core.infra.storage import get_db
@@ -49,7 +49,7 @@ def test_live_graph_executes_tools_and_proposes_without_executing(monkeypatch, p
                 }
             ],
         ),
-        AIMessage(content="Pedido validado; nada foi executado."),
+        AIMessage(content="Proposta criada, aguardando aprovação."),
     ]
     if partial:
         responses.insert(
@@ -102,7 +102,7 @@ def test_live_graph_executes_tools_and_proposes_without_executing(monkeypatch, p
         graph,
         "orquestrador_app",
         SimpleNamespace(
-            invoke=lambda *a, **kw: AIMessage(content="Nada foi executado.")
+            invoke=lambda *a, **kw: AIMessage(content="Aguarda aprovação.")
         ),
     )
     marker = current_context.set(replace(context_for(), turn_id="live-turn"))
@@ -112,9 +112,10 @@ def test_live_graph_executes_tools_and_proposes_without_executing(monkeypatch, p
         )
     finally:
         current_context.reset(marker)
-    assert "Nada foi alterado" in answer
+    assert "AGUARDANDO_APROVACAO" in answer
     if partial:
-        assert "Não consegui concluir" in answer and "saldo insuficiente" in answer
+        assert "Etapas não concluídas" in answer and "saldo insuficiente" in answer
+    assert get_db().approvals.count_documents({}) == 1
     assert get_db().execution_mock.count_documents({}) == 0
     assert (
         get_db().business_mock.find_one({"_id": "1:batch:1"})["data"]["currentQuantity"]
@@ -257,15 +258,15 @@ def test_partial_proposal_preserves_user_question_without_exposing_jev(monkeypat
         )
     finally:
         current_context.reset(marker)
-    assert "Nada foi alterado" in answer and "quantidade e a unidade" in answer
+    assert "AGUARDANDO_APROVACAO" in answer and "quantidade e a unidade" in answer
     assert "JEV" not in answer and "RETRY_SPECIALIST" not in answer
+    assert get_db().approvals.count_documents({}) == 1
     assert get_db().execution_mock.count_documents({}) == 0
 
 
 def test_live_missing_typesafe_key_blocks_tool(monkeypatch):
     from pydantic import SecretStr
 
-    monkeypatch.setattr(tool_gate, "JEV_ESCOPO", "todas")
     monkeypatch.setattr(judge, "TYPESAFE_API_KEY", SecretStr(""))
     agent = create_agent(
         ScriptedModel(
@@ -332,8 +333,8 @@ def test_live_direct_call_cannot_bypass_middleware(monkeypatch):
     assert get_db().business_mock.count_documents({}) == 0
 
 
-def test_pergunta_de_faq_percorre_o_grafo_e_responde_sem_jev(monkeypatch):
-    """Roteador -> FAQ (busca em código) -> resposta; nada de tool-calling nem de JEV."""
+def test_pergunta_de_faq_percorre_o_grafo_e_mantem_jev_individual(monkeypatch):
+    """Busca FAQ determinística passa pelo JEV; o modelo apenas redige."""
     monkeypatch.setattr(graph, "LLM_MODE", "live")
     monkeypatch.setattr(graph, "guardrail_insulto", lambda text: {"bloqueado": False})
     monkeypatch.setattr(graph, "guardrail_escopo", lambda text: {"bloqueado": False})
@@ -345,10 +346,13 @@ def test_pergunta_de_faq_percorre_o_grafo_e_responde_sem_jev(monkeypatch):
         ),
     )
 
-    def sem_jev(state):
-        raise AssertionError("o FAQ não deve passar pelo JEV")
+    seen = []
 
-    monkeypatch.setattr(judge, "evaluate", sem_jev)
+    def evaluate(state):
+        seen.append(state)
+        return jev_evaluation(fields=state["tool"]["schema"].get("properties", {}))
+
+    monkeypatch.setattr(judge, "evaluate", evaluate)
     monkeypatch.setattr(
         graph,
         "llm_especialista",
@@ -358,8 +362,11 @@ def test_pergunta_de_faq_percorre_o_grafo_e_responde_sem_jev(monkeypatch):
     )
     marker = current_context.set(replace(context_for(), turn_id="faq-turn"))
     try:
-        answer = graph.executar_fluxo_assessor("O que é o OCR?", "faq", "demo-estoquista")
+        answer = graph.executar_fluxo_assessor(
+            "O que é o OCR?", "faq", "demo-estoquista"
+        )
     finally:
         current_context.reset(marker)
+    assert len(seen) == 1 and seen[0]["tool"]["name"] == "faq_retriever"
     assert "O OCR lê a foto do produto." in answer
     assert "JEV" not in answer and "confirmar" not in answer

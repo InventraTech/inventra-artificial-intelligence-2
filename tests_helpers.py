@@ -1,10 +1,17 @@
 """Helpers exclusivos da suíte local (não usados pela aplicação)."""
 
+import uuid
+
 from pydantic import SecretStr
 
 from iai.app.core.infra.security import DEMO_IDENTITIES, RequestContext
-from iai.app.core.inventra.business import MockGateway
-from iai.app.core.inventra.domain import ROLE_OPERATIONS, Action
+from iai.app.core.inventra.approvals import create_proposal, decide
+from iai.app.core.inventra.domain import (
+    ROLE_OPERATIONS,
+    Action,
+    DecisionInput,
+    ProposalInput,
+)
 
 
 def context_for(token="demo-estoquista"):
@@ -12,11 +19,8 @@ def context_for(token="demo-estoquista"):
 
 
 def approved(operation, parameters):
-    """Executa direto no adaptador MOCK (sem fluxo de confirmação humana).
-
-    Serve só para testar as regras de negócio do mock; devolve {"status", "result"}.
-    """
-    token = next(
+    # Solicita com o perfil mais simples que pode propor a operação.
+    requester = next(
         token
         for token, role in (
             ("demo-estoquista", "ESTOQUISTA"),
@@ -25,17 +29,19 @@ def approved(operation, parameters):
         )
         if operation in ROLE_OPERATIONS[role]
     )
-    ctx = context_for(token)
-    outcome = MockGateway().execute(
-        Action(operation=operation, parameters=parameters),
-        {"user_id": ctx.identity.user_id, "kitchen_id": ctx.identity.kitchen_id},
-        ctx,
-        f"teste:{operation}:{id(parameters)}",
+    p = create_proposal(
+        ProposalInput(
+            action=Action(operation=operation, parameters=parameters),
+            justification="Operação autorizada no teste",
+            idempotency_key=str(uuid.uuid4()),
+        ),
+        context_for(requester),
     )
-    return {
-        "status": "CONCLUIDA" if outcome.ok else "FALHOU",
-        "result": outcome.model_dump(mode="json"),
-    }
+    return decide(
+        p["id"],
+        DecisionInput(decision="approve", proposal_hash=p["proposal_hash"]),
+        context_for(requester),
+    )
 
 
 def jev_evaluation(*, failed=None, route="none", missing="not_identified", fields=()):

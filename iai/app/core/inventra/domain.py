@@ -218,6 +218,39 @@ class Action(StrictModel):
         return self
 
 
+class ProposalInput(StrictModel):
+    action: Action
+    justification: str = Field(min_length=1, max_length=1000)
+    idempotency_key: str = Field(min_length=1, max_length=150)
+
+    @model_validator(mode="after")
+    def no_credentials(self):
+        import json
+
+        from iai.app.core.infra.privacy import remove_secrets
+
+        serialized = json.dumps(self.model_dump(mode="json"), ensure_ascii=False)
+        if serialized != remove_secrets(serialized):
+            raise ValueError(
+                "Não inclua tokens ou senhas nos parâmetros, justificativa ou identificador."
+            )
+        return self
+
+
+class DecisionInput(StrictModel):
+    decision: Literal["approve", "reject"]
+    proposal_hash: str = Field(pattern=r"^[a-f0-9]{64}$")
+    reason: str | None = Field(default=None, max_length=1000)
+
+    @model_validator(mode="after")
+    def no_credentials(self):
+        from iai.app.core.infra.privacy import remove_secrets
+
+        if self.reason and remove_secrets(self.reason) != self.reason:
+            raise ValueError("Não inclua tokens ou senhas na decisão.")
+        return self
+
+
 class Query(StrictModel):
     resource: Literal[
         "produtos",

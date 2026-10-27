@@ -884,3 +884,264 @@ def test_agentes_tem_a_tool_de_documentos():
     assert (
         "buscar_documentos" not in graph.router_app.nodes["tools"].bound.tools_by_name
     )
+
+
+def test_documentos_e_estoque_em_paralelo_com_jev_e_artefato_fiel(client, monkeypatch):
+    from threading import Barrier
+    from types import SimpleNamespace
+
+    from langchain.agents import create_agent
+    from langchain_core.language_models.fake_chat_models import (
+        FakeMessagesListChatModel,
+    )
+    from langchain_core.messages import AIMessage
+
+    from iai.app.core.assistant import artifacts, graph, judge
+    from iai.app.core.assistant.tool_gate import JevToolGate
+    from iai.app.core.inventra.business import MockGateway
+    from iai.app.core.tools import operational
+    from iai.app.core.tools.documentos import buscar_documentos
+    from iai.app.core.tools.operational import consultar_inventra
+    from tests_helpers import jev_evaluation
+
+    uploaded = client.post(
+        "/arquivos",
+        headers=auth(),
+        files=arquivos_form(
+            (
+                "estoque.txt",
+                b"Relatorio antigo de arroz: 999 kg em uma planilha de demonstracao.",
+            )
+        ),
+    )
+    assert uploaded.status_code == 200 and uploaded.json()["indexados"] == 1
+    barrier = Barrier(2)
+    original_search = indice.buscar
+
+    class Gateway:
+        def query(self, query, ctx):
+            barrier.wait(timeout=5)
+            return MockGateway().query(query, ctx)
+
+    def search(*args, **kwargs):
+        barrier.wait(timeout=5)
+        return original_search(*args, **kwargs)
+
+    monkeypatch.setattr(operational, "gateway", lambda: Gateway())
+    monkeypatch.setattr(indice, "buscar", search)
+
+    class Model(FakeMessagesListChatModel):
+        def bind_tools(self, tools, **kwargs):
+            return self
+
+    tools = [consultar_inventra, buscar_documentos]
+    specialist = create_agent(
+        Model(
+            responses=[
+                AIMessage(
+                    content="",
+                    tool_calls=[
+                        {
+                            "id": "stock",
+                            "name": "consultar_inventra",
+                            "args": {"resource": "estoque"},
+                        },
+                        {
+                            "id": "document",
+                            "name": "buscar_documentos",
+                            "args": {"consulta": "arroz"},
+                        },
+                    ],
+                ),
+                AIMessage(
+                    content="Estoque atual consultado; documento é referência histórica."
+                ),
+            ]
+        ),
+        tools=tools,
+        middleware=[JevToolGate("estoquista", tools)],
+    )
+    monkeypatch.setattr(graph, "LLM_MODE", "live")
+    monkeypatch.setattr(graph, "estoquista_app", specialist)
+    monkeypatch.setattr(graph, "guardrail_insulto", lambda text: {"bloqueado": False})
+    monkeypatch.setattr(graph, "guardrail_escopo", lambda text: {"bloqueado": False})
+    monkeypatch.setattr(
+        graph,
+        "router_app",
+        SimpleNamespace(
+            invoke=lambda *args, **kwargs: {
+                "messages": [AIMessage(content="ROUTE=estoquista")]
+            }
+        ),
+    )
+    monkeypatch.setattr(
+        graph,
+        "orquestrador_app",
+        SimpleNamespace(invoke=lambda *args, **kwargs: AIMessage(content="Confirmado")),
+    )
+    monkeypatch.setattr(
+        judge,
+        "evaluate",
+        lambda state: jev_evaluation(
+            fields=state["tool"]["schema"].get("properties", {})
+        ),
+    )
+    monkeypatch.setattr(
+        artifacts,
+        "choose_presentation",
+        lambda *args, **kwargs: artifacts.PresentationChoice(kind="bar"),
+    )
+    response = client.post(
+        "/chat",
+        headers=auth(),
+        json={
+            "session_id": "docs-parallel",
+            "user_id": "demo-estoquista",
+            "pergunta": "Compare o estoque e consulte minha planilha de arroz",
+        },
+    )
+    assert response.status_code == 200
+    (artifact,) = response.json()["artifacts"]
+    assert artifact["datasets"][0]["data"] == [50, 100, 5]
+    assert 999 not in artifact["datasets"][0]["data"]
+    from iai.app.core.infra.storage import get_db
+
+    metric = get_db().metrics.find_one({"session_id": "docs-parallel"})
+    assert {c["tool"] for c in metric["jev"]} == {
+        "consultar_inventra",
+        "buscar_documentos",
+    }
+    assert all(c["status"] == "EXECUTED" for c in metric["jev"])
+
+
+def test_vision_adapter_sends_validated_image_and_requires_structured_result(
+    monkeypatch,
+):
+    import base64
+    from types import SimpleNamespace
+
+    from iai.app.core.assistant import llms
+
+    observed = []
+    expected = descricao.DescricaoImagem(
+        descricao="Uma caixa de tomates com etiqueta visível.",
+        texto_visivel="Lote 12",
+        contem_instrucoes_para_ia=False,
+    )
+
+    def invoke(messages):
+        observed.append(messages)
+        return expected
+
+    def structured(schema):
+        assert schema is descricao.DescricaoImagem
+        return SimpleNamespace(invoke=invoke)
+
+    monkeypatch.setattr(
+        llms, "llm_gemini", SimpleNamespace(with_structured_output=structured)
+    )
+    raw = png()
+    assert descricao._chamar_modelo(raw, "image/png") is expected
+    image_url = observed[0][1].content[1]["image_url"]["url"]
+    assert image_url == "data:image/png;base64," + base64.b64encode(raw).decode("ascii")
+    assert "NÃO" in observed[0][0].content or "Nunca" in observed[0][0].content
+    monkeypatch.setattr(
+        llms,
+        "llm_gemini",
+        SimpleNamespace(
+            with_structured_output=lambda schema: SimpleNamespace(
+                invoke=lambda messages: {"descricao": "incompleto"}
+            )
+        ),
+    )
+    with pytest.raises(TypeError):
+        descricao._chamar_modelo(raw, "image/png")
+
+
+def test_gemini_embedding_adapter_preserves_task_and_dimension_contract(monkeypatch):
+    import langchain_google_genai
+
+    observed = []
+
+    class Client:
+        def embed_documents(self, texts, **kwargs):
+            observed.append((texts, kwargs))
+            return [[1.0] * indice.EMBEDDING_DIM for _ in texts]
+
+        def embed_query(self, text, **kwargs):
+            observed.append((text, kwargs))
+            return [0.5] * indice.EMBEDDING_DIM
+
+    def create(**kwargs):
+        assert kwargs["model"] == indice.EMBEDDING_MODEL
+        assert kwargs["output_dimensionality"] == indice.EMBEDDING_DIM
+        return Client()
+
+    monkeypatch.setattr(langchain_google_genai, "GoogleGenerativeAIEmbeddings", create)
+    embedder = indice.EmbedderGemini()
+    assert len(embedder.documentos(["Prazo de entrega"])[0]) == indice.EMBEDDING_DIM
+    assert len(embedder.consulta("prazo")) == indice.EMBEDDING_DIM
+    assert observed[0][1]["task_type"] == "RETRIEVAL_DOCUMENT"
+    assert observed[1][1]["task_type"] == "RETRIEVAL_QUERY"
+
+
+def test_document_routes_and_tool_explain_index_outage(client, monkeypatch):
+    def unavailable(*args, **kwargs):
+        raise indice.IndiceIndisponivel("index unavailable")
+
+    monkeypatch.setattr(indice, "listar", unavailable)
+    monkeypatch.setattr(indice, "remover", unavailable)
+    monkeypatch.setattr(indice, "buscar", unavailable)
+    assert client.get("/arquivos", headers=auth()).status_code == 503
+    assert client.delete("/arquivos/" + "a" * 32, headers=auth()).status_code == 503
+    assert "Não consegui consultar" in _chamar_tool("demo-estoquista", "arroz")
+
+
+def test_document_ingestion_rejects_invalid_display_name_without_indexing():
+    result = servico.ingerir_arquivo(
+        DEMO_IDENTITIES["demo-estoquista"], "...", b"texto"
+    )
+    assert result.status == "recusado" and result.codigo == "nome_invalido"
+    assert not indice.listar(DEMO_IDENTITIES["demo-estoquista"])
+    assert servico.pasta_segura(".../segura/arquivo.txt") == "segura"
+
+
+@pytest.mark.parametrize("response", [False, True, None])
+def test_content_guardrail_model_contract_and_fail_closed_result(monkeypatch, response):
+    from types import SimpleNamespace
+
+    from langchain_core.runnables import RunnableLambda
+
+    from iai.app.core.assistant import llms
+
+    observed = []
+
+    def invoke(prompt):
+        observed.append(prompt.to_messages()[-1].content)
+        if response is None:
+            return {"resultado": "fora do contrato"}
+        return guardrail_arquivos.ResultadoVarredura(
+            injecao=response, motivo="classificação de teste"
+        )
+
+    fake = SimpleNamespace(with_structured_output=lambda schema: RunnableLambda(invoke))
+    monkeypatch.setattr(llms, "llm_gemini", fake)
+    monkeypatch.setattr(llms, "llm_rapido", fake)
+    if response is None:
+        with pytest.raises(TypeError):
+            guardrail_arquivos._classificar_janela("Documento de compras")
+    else:
+        assert (
+            guardrail_arquivos._classificar_janela("Documento de compras") is response
+        )
+    assert observed and "<<<ARQUIVO>>>" in observed[0] and "<<<FIM>>>" in observed[0]
+
+
+def test_content_guardrail_windows_include_end_of_large_document():
+    source = (
+        "A" * (guardrail_arquivos.JANELA * (guardrail_arquivos.MAX_JANELAS + 3))
+        + "FIM_DO_DOCUMENTO"
+    )
+    windows = guardrail_arquivos._janelas(source)
+    assert len(windows) <= guardrail_arquivos.MAX_JANELAS
+    assert windows[0].startswith("A") and windows[-1].endswith("FIM_DO_DOCUMENTO")
