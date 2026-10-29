@@ -408,7 +408,8 @@ class FakeSpring:
             p["unit"] = body["unitId"]
         return self._resp(200, self.product_dto(pid))
 
-    def flag(self, kind, value):
+    @staticmethod
+    def flag(kind, value):
         def handler(self, m, q, body):
             table = self.products if kind == "product" else self.suppliers
             ident = int(m.group(1))
@@ -595,7 +596,8 @@ class FakeSpring:
         self.move(self.batches[bid], "ENTRY", float(body["initialQuantity"]))
         return self._resp(201, self.batch_dto(self.batches[bid]))
 
-    def batch_action(self, kind):
+    @staticmethod
+    def batch_action(kind):
         schema = {
             "restock": "RestockRequest",
             "consume": "ConsumeStockRequest",
@@ -877,7 +879,7 @@ ROUTES = [
     (("PUT", r"/api/products/(\d+)"), FakeSpring.put_product),
     (
         ("PATCH", r"/api/products/(\d+)/deactivate"),
-        FakeSpring.flag(None, "product", False),
+        FakeSpring.flag("product", False),
     ),
     (("GET", r"/api/products/(\d+)/kitchen-parameters"), FakeSpring.kitchen_parameters),
     (("GET", r"/api/products/(\d+)/suppliers"), FakeSpring.product_suppliers),
@@ -886,7 +888,7 @@ ROUTES = [
     (("POST", r"/api/suppliers"), FakeSpring.post_supplier),
     (
         ("PATCH", r"/api/suppliers/(\d+)/deactivate"),
-        FakeSpring.flag(None, "supplier", False),
+        FakeSpring.flag("supplier", False),
     ),
     (("GET", r"/api/stock-batches"), FakeSpring.get_batches),
     (("GET", r"/api/stock-batches/expiring-soon"), FakeSpring.expiring),
@@ -895,15 +897,15 @@ ROUTES = [
     (("POST", r"/api/stock-batches/consume"), FakeSpring.consume_product),
     (
         ("PATCH", r"/api/stock-batches/(\d+)/restock"),
-        FakeSpring.batch_action(None, "restock"),
+        FakeSpring.batch_action("restock"),
     ),
     (
         ("PATCH", r"/api/stock-batches/(\d+)/consume"),
-        FakeSpring.batch_action(None, "consume"),
+        FakeSpring.batch_action("consume"),
     ),
     (
         ("PATCH", r"/api/stock-batches/(\d+)/adjust"),
-        FakeSpring.batch_action(None, "adjust"),
+        FakeSpring.batch_action("adjust"),
     ),
     (("GET", r"/api/stock-movements"), FakeSpring.get_movements),
     (("GET", rf"/api/kitchens/{KITCHEN}/stock"), FakeSpring.kitchen_stock),
