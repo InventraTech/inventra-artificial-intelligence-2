@@ -456,15 +456,10 @@ def test_plano_sem_lote_para_o_nome(estoquista):
     assert plano(product_name="Abobora cabotia", quantity="10").code == "SEM_LOTES"
 
 
-def test_plano_ambiguo_pede_o_produto_pelo_nome(estoquista):
-    resultado = plano(product_name="a", quantity="1")
-
-    assert resultado.code == "PRODUTO_AMBIGUO"
-    assert {c["name"] for c in resultado.data["candidatos"]} == {
-        "Arroz",
-        "Carne",
-        "Tomate",
-    }
+def test_plano_com_busca_de_uma_letra_nao_chuta_nem_lista_tudo(estoquista):
+    # Antes, "a" casava com todos os produtos e virava PRODUTO_AMBIGUO. Uma letra não é nome:
+    # a ambiguidade de verdade (duas marcas de arroz) está em test_nome_confere.py.
+    assert plano(product_name="a", quantity="1").code == "SEM_LOTES"
 
 
 def test_plano_aceita_acentos_e_product_id(estoquista):

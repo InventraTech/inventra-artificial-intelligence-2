@@ -11,6 +11,7 @@ import httpx
 from pymongo import ReturnDocument
 
 from iai.app.core.config import API_URL, BUSINESS_MODE, HTTP_TIMEOUT, business_date
+from iai.app.core.infra.retrieval import nome_confere, termos_de_busca_alternativos
 from iai.app.core.infra.security import RequestContext
 from iai.app.core.infra.storage import get_db
 from iai.app.core.inventra.domain import Action, Operation, Query, ToolResult
@@ -185,6 +186,13 @@ def consumo_por_produto(lotes, unidades=None):
     ]
 
 
+def nome_do_registro(row):
+    """Nome para filtrar: produto/fornecedor direto ou o produto de um lote/saldo."""
+    return row.get(
+        "name", row.get("legalName", (row.get("product") or {}).get("name", ""))
+    )
+
+
 class SpringGateway:
     def query(self, query, ctx):
         k = ctx.identity.kitchen_id
@@ -302,9 +310,38 @@ class SpringGateway:
         )
         if not out.ok:
             return out
-        # Filtros locais somente sobre dados já autorizados; não inventar filtros HTTP.
-        from iai.app.core.infra.retrieval import normalize
+        filtrado = self._filtrar(out, query, resource, ctx)
+        if (
+            resource == "produtos"
+            and query.name
+            and not query.product_id
+            and filtrado.code == "VAZIO"
+        ):
+            return self._produtos_com_busca_ampla(query, ctx, paths[resource], filtrado)
+        return filtrado
 
+    def _produtos_com_busca_ampla(self, query, ctx, path, vazio):
+        """Nova tentativa quando o servidor não achou o produto pelo texto inteiro.
+
+        A API filtra por trecho contíguo e não ignora acento ("acucar" não acha "Açúcar", "tomates"
+        não acha "Tomate"). Tentamos a palavra mais longa da busca (e o singular dela) e, por
+        último, a página sem name; o resultado sempre passa de novo pelo filtro local com a busca
+        completa, o tamanho de página continua o do pedido e o catálogo global nunca sai sem
+        filtro (só voltam os produtos que casam com a busca)."""
+        for termo in [*termos_de_busca_alternativos(query.name), None]:
+            params = {"page": query.page, "size": query.size}
+            if termo:
+                params["name"] = termo
+            outra = self._request("GET", path, ctx, params=params, expected="produtos")
+            if not outra.ok:
+                return vazio
+            outra = self._filtrar(outra, query, "produtos", ctx)
+            if outra.code != "VAZIO":
+                return outra
+        return vazio
+
+    def _filtrar(self, out, query, resource, ctx):
+        # Filtros locais somente sobre dados já autorizados; não inventar filtros HTTP.
         data = out.data
         rows = data.get("content", [data]) if isinstance(data, dict) else data
         if query.record_id and resource not in {"itens_requisicao", "contagens"}:
@@ -316,17 +353,7 @@ class SpringGateway:
                 if (r.get("product") or {}).get("id") == query.product_id
             ]
         if query.name:
-            rows = [
-                r
-                for r in rows
-                if normalize(query.name)
-                in normalize(
-                    r.get(
-                        "name",
-                        r.get("legalName", (r.get("product") or {}).get("name", "")),
-                    )
-                )
-            ]
+            rows = [r for r in rows if nome_confere(query.name, nome_do_registro(r))]
         if query.status:
             rows = [r for r in rows if r.get("status") == query.status]
         if query.mine and resource == "inventarios":
@@ -900,19 +927,7 @@ class MockGateway:
         if q.record_id and q.resource not in {"itens_requisicao", "contagens"}:
             rows = [r for r in rows if r.get("id") == q.record_id]
         if q.name:
-            from iai.app.core.infra.retrieval import normalize
-
-            rows = [
-                r
-                for r in rows
-                if normalize(q.name)
-                in normalize(
-                    r.get(
-                        "name",
-                        r.get("legalName", (r.get("product") or {}).get("name", "")),
-                    )
-                )
-            ]
+            rows = [r for r in rows if nome_confere(q.name, nome_do_registro(r))]
         if q.status:
             rows = [r for r in rows if r.get("status") == q.status]
         if q.mine and q.resource in {"requisicoes", "inventarios"}:

@@ -239,6 +239,9 @@ Toda consulta se refere EXCLUSIVAMENTE à cozinha do usuário autenticado.
 - "Quais produtos tenho?", "o que há no estoque?", saldos e quantidades:
   consultar_inventra com resource=estoque, SEM product_id. Devolve o saldo da cozinha.
 - Lotes: resource=lotes. Vencimentos: resource=validade. Abaixo do mínimo: resource=estoque_minimo.
+- Procurar um produto que a cozinha TEM: resource=estoque com name (o caminho da cozinha é estoque,
+  não produtos). name aceita nome parcial, plural ou sem acento, em qualquer ordem
+  ("tomates" acha "Tomate Cereja"): passe o que o usuário disse, sem exigir o nome completo.
 - resource=produtos é o catálogo GLOBAL de cadastro (milhares de itens que NÃO são da cozinha).
   Use-o apenas com name, para descobrir o ID de um produto citado.
   NUNCA liste o catálogo, NUNCA informe o total dele e NUNCA ofereça listar mais produtos dele.
