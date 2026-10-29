@@ -247,6 +247,38 @@ def expire_pending():
     )
 
 
+def cancelar_pelo_juiz(identifiers, ctx, motivo):
+    """Descarta propostas pendentes que o juiz reprovou antes de chegarem ao usuário.
+
+    Só mexe em propostas ainda pendentes do próprio solicitante. Ficam na auditoria como recusadas
+    pelo juiz e não aparecem nas listas do usuário."""
+    if not identifiers:
+        return 0
+    moment = now()
+    resultado = get_db().approvals.update_many(
+        {
+            "_id": {"$in": list(identifiers)},
+            "status": PENDING,
+            "requester_id": ctx.identity.user_id,
+            "kitchen_id": ctx.identity.kitchen_id,
+        },
+        {
+            "$set": {
+                "status": "RECUSADA",
+                "decided_by": "juiz",
+                "decision": "reject",
+                "decision_reason": motivo,
+                "decided_at": moment,
+                "judge_cancelled": True,
+            },
+            "$push": {
+                "audit": {"event": "CANCELADA_PELO_JUIZ", "at": moment, "actor": "iai"}
+            },
+        },
+    )
+    return resultado.modified_count
+
+
 def get_proposal(identifier, ctx):
     expire_pending()
     doc = get_db().approvals.find_one(
@@ -262,7 +294,7 @@ def get_proposal(identifier, ctx):
 
 def list_proposals(ctx, status=None, offset=0, limit=20, *, mine=False):
     expire_pending()
-    query = {"kitchen_id": ctx.identity.kitchen_id}
+    query = {"kitchen_id": ctx.identity.kitchen_id, "judge_cancelled": {"$ne": True}}
     if mine or ctx.identity.role != "SUPERVISOR":
         query["requester_id"] = ctx.identity.user_id
     if status:

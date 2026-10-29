@@ -2,6 +2,7 @@ import json
 import os
 
 import pytest
+from langchain_core.messages import AIMessage
 from pydantic import SecretStr
 
 from iai.app.core.assistant.graph import executar_fluxo_assessor
@@ -165,16 +166,10 @@ def faq_context(monkeypatch):
     from iai.app.core.assistant import judge
     from iai.app.core.assistant.tool_gate import live_tool_scope
     from iai.app.core.infra.security import current_context
-    from tests_helpers import context_for, jev_evaluation
+    from tests_helpers import context_for, jev_fidelidade
 
     marker = current_context.set(context_for())
-    monkeypatch.setattr(
-        judge,
-        "evaluate",
-        lambda state: jev_evaluation(
-            fields=state["tool"]["schema"].get("properties", {})
-        ),
-    )
+    monkeypatch.setattr(judge, "evaluate_fidelidade", lambda state: jev_fidelidade())
     try:
         with live_tool_scope():
             yield
@@ -182,49 +177,49 @@ def faq_context(monkeypatch):
         current_context.reset(marker)
 
 
-def test_faq_sem_jev_nao_busca_documentacao_nem_usa_fallback(monkeypatch, faq_context):
-    from iai.app.core.assistant import graph, judge
-    from iai.app.core.tools import faq
-
-    def forbidden(*args, **kwargs):
-        raise AssertionError("Nenhuma busca deve acontecer antes do JEV")
-
-    def unavailable(state):
-        raise judge.JevUnavailable("TEST_UNAVAILABLE")
-
-    monkeypatch.setattr(judge, "evaluate", unavailable)
-    monkeypatch.setattr(faq, "buscar_faq", forbidden)
-    result = graph.responder_faq(_estado_faq("Qual o suporte?"), config={})
-    assert result["jev_halt"] and "indisponível" in _texto_final(result)
-    assert "faq:respondido" not in result["agentes_chamados"]
-    assert all(c["status"] == "REJECT" for c in result["jev_calls"].values())
-
-
-def test_faq_repair_decision_never_becomes_documentary_evidence(
+def test_faq_com_jev_fora_do_ar_entrega_a_resposta_da_documentacao(
     monkeypatch, faq_context
 ):
     from types import SimpleNamespace
 
     from iai.app.core.assistant import graph, judge
-    from tests_helpers import jev_evaluation
 
-    generations = []
+    def unavailable(state):
+        raise judge.JevUnavailable("TEST_UNAVAILABLE")
+
+    monkeypatch.setattr(judge, "evaluate_fidelidade", unavailable)
+    monkeypatch.setattr(
+        graph,
+        "llm_especialista",
+        SimpleNamespace(invoke=lambda *a, **kw: AIMessage(content="O OCR lê fotos.")),
+    )
+    result = graph.responder_faq(_estado_faq("O que é o OCR?"), config={})
+    assert _texto_final(result) == "O OCR lê fotos."
+    assert "faq:respondido" in result["agentes_chamados"]
+    assert any(c.get("error_type") for c in result["jev_calls"].values())
+
+
+def test_faq_reprovada_pelo_jev_volta_ao_trecho_literal(monkeypatch, faq_context):
+    from types import SimpleNamespace
+
+    from iai.app.core.assistant import graph, judge
+    from iai.app.core.tools.faq import buscar_faq
+    from tests_helpers import jev_fidelidade
+
     monkeypatch.setattr(
         judge,
-        "evaluate",
-        lambda state: jev_evaluation(
-            failed={"arguments_grounded": 0.1},
-            route="agent_repair",
-            fields=["question"],
-        ),
+        "evaluate_fidelidade",
+        lambda state: jev_fidelidade(failed={"quantities_supported": 0.1}),
     )
     monkeypatch.setattr(
         graph,
         "llm_especialista",
-        SimpleNamespace(invoke=lambda *args, **kwargs: generations.append(args)),
+        SimpleNamespace(
+            invoke=lambda *a, **kw: AIMessage(content="O OCR custa R$ 99999 por mês.")
+        ),
     )
-    result = graph.responder_faq(_estado_faq("Qual o contato do suporte?"), config={})
-    assert not generations
-    assert result["jev_halt"] and "Reformule" in _texto_final(result)
-    assert all(c["status"] == "RETRY_SPECIALIST" for c in result["jev_calls"].values())
-    assert "faq:respondido" not in result["agentes_chamados"]
+    result = graph.responder_faq(_estado_faq("O que é o OCR?"), config={})
+    assert _texto_final(result) == buscar_faq("O que é o OCR?")[0]["resposta"]
+    assert "99999" not in str(result["messages"][-1].content)
+    decisoes = [c["decision"] for c in result["jev_calls"].values()]
+    assert "RETRY_SPECIALIST" in decisoes
