@@ -1,10 +1,14 @@
 """Mongo real ou substituto explícito para demonstração/testes. Sem I/O no import."""
 
+import os
 from functools import lru_cache
 
 from pymongo import MongoClient
 
 from iai.app.core.config import MONGO_CONNECTION, STORAGE_MODE
+
+# Atlas pela internet doméstica/corporativa pode levar mais de 3 s no DNS+TLS.
+MONGO_TIMEOUT_MS = int(os.getenv("IAI_MONGO_TIMEOUT_MS", "10000"))
 
 
 @lru_cache(maxsize=1)
@@ -16,8 +20,8 @@ def get_client():
     return MongoClient(
         MONGO_CONNECTION.get_secret_value(),
         tz_aware=True,
-        serverSelectionTimeoutMS=3000,
-        connectTimeoutMS=3000,
+        serverSelectionTimeoutMS=MONGO_TIMEOUT_MS,
+        connectTimeoutMS=MONGO_TIMEOUT_MS,
     )
 
 

@@ -48,7 +48,7 @@ def test_cada_cargo_enxerga_so_as_tools_do_seu_agente():
     comprador = nomes_das_tools("demo-comprador")
     supervisor = nomes_das_tools("demo-supervisor")
 
-    assert len(estoquista) == 11 and len(comprador) == 10 and len(supervisor) == 20
+    assert len(estoquista) == 12 and len(comprador) == 10 and len(supervisor) == 21
     assert "propor_registrar_saida" in estoquista - comprador
     assert "propor_criar_requisicao" in comprador - estoquista
     assert "propor_criar_produto" in supervisor - estoquista - comprador

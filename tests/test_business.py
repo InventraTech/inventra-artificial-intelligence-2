@@ -144,28 +144,3 @@ def test_real_identity_validated_by_spring_not_client_claims(monkeypatch):
     )
     assert ctx.identity.user_id == "trusted-id"
     assert not ctx.identity.mocked
-
-
-def test_real_edit_count_is_prepared_but_no_network_call(monkeypatch):
-    monkeypatch.setattr(
-        httpx,
-        "request",
-        lambda *a, **kw: pytest.fail("Endpoint não pode ser inventado"),
-    )
-    action = Action(
-        operation="alterar_contagem",
-        parameters={
-            "inventoryId": 1,
-            "countId": 2,
-            "batchId": 3,
-            "physicalQuantity": 4,
-        },
-    )
-    assert (
-        SpringGateway()
-        .execute(
-            action, {"user_id": "original", "kitchen_id": 7}, real_context(), "key"
-        )
-        .code
-        == "INTEGRACAO_PENDENTE"
-    )

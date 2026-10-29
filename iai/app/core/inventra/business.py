@@ -1,5 +1,6 @@
 """Adaptadores de negócio. Somente o serviço de confirmação humana deve chamar execute()."""
 
+import logging
 from collections import Counter
 from datetime import timedelta
 from decimal import Decimal
@@ -20,6 +21,9 @@ class BusinessGateway(Protocol):
     def execute(
         self, action: Action, requester: dict, ctx: RequestContext, key: str
     ) -> ToolResult: ...
+
+
+logger = logging.getLogger(__name__)
 
 
 def result(ok, code, message, data=None, *, mocked=False, incomplete=False):
@@ -71,6 +75,116 @@ def redact_secrets(value):
     return value
 
 
+CONSUMO_AVISO = (
+    "Consumo estimado = quantidade inicial − quantidade atual dos lotes da cozinha "
+    "(inclui baixas, ajustes e perdas). A API não informa o histórico de saídas."
+)
+
+
+CONSUMO_REAL = (
+    "Consumo = soma das baixas registradas no histórico de movimentações do estoque "
+    "(últimas 500; inclui uso, perda e vencimento)."
+)
+LIMITE_DE_MOVIMENTOS = 500
+
+
+def consumo_das_movimentacoes(movimentos, unidades=None):
+    """Ranking de saída por produto a partir das baixas (WRITE_OFF) reais da API."""
+    unidades = unidades or {}
+    agrupado = {}
+    for movimento in movimentos:
+        if movimento.get("type") != "WRITE_OFF":
+            continue
+        produto = movimento.get("product") or {}
+        identificador = produto.get("id")
+        if identificador is None or not produto.get("name"):
+            continue
+        try:
+            quantidade = Decimal(str(movimento.get("quantity")))
+        except ArithmeticError:
+            continue
+        extra = unidades.get(identificador) or {}
+        item = agrupado.setdefault(
+            identificador,
+            {
+                "product": {
+                    "id": identificador,
+                    "name": produto["name"],
+                    "unit": extra.get("unit"),
+                    "category": extra.get("category"),
+                },
+                "consumed": Decimal(0),
+                "movements": 0,
+            },
+        )
+        item["consumed"] += quantidade
+        item["movements"] += 1
+    ranking = sorted(
+        (i for i in agrupado.values() if i["consumed"] > 0),
+        key=lambda i: (-i["consumed"], i["product"]["name"]),
+    )
+    return [
+        {
+            "product": {k: v for k, v in i["product"].items() if v is not None},
+            "consumedQuantity": float(i["consumed"]),
+            "movements": i["movements"],
+        }
+        for i in ranking
+    ]
+
+
+def consumo_por_produto(lotes, unidades=None):
+    """Ranking de consumo acumulado por produto, estimado a partir dos lotes.
+
+    A API não expõe movimentações; a diferença entre o que entrou no lote e o que
+    resta é a melhor evidência disponível de saída. Só conta lotes que informam a
+    quantidade inicial e nunca inventa valores ausentes.
+    """
+    unidades = unidades or {}
+    agrupado = {}
+    for lote in lotes:
+        produto = lote.get("product") or {}
+        identificador = produto.get("id")
+        if identificador is None or lote.get("initialQuantity") is None:
+            continue
+        try:
+            inicial = Decimal(str(lote["initialQuantity"]))
+            atual = Decimal(str(lote.get("currentQuantity") or 0))
+        except ArithmeticError:
+            continue
+        item = agrupado.setdefault(
+            identificador,
+            {
+                "product": {
+                    "id": identificador,
+                    "name": produto.get("name"),
+                    "unit": produto.get("unit") or unidades.get(identificador),
+                    "category": produto.get("category"),
+                },
+                "consumed": Decimal(0),
+                "current": Decimal(0),
+                "batches": 0,
+            },
+        )
+        item["current"] += atual
+        item["batches"] += 1
+        if inicial > atual:
+            item["consumed"] += inicial - atual
+    ranking = [
+        i for i in agrupado.values() if i["consumed"] > 0 and i["product"]["name"]
+    ]
+    ranking.sort(key=lambda i: (-i["consumed"], i["product"]["name"]))
+    return [
+        {
+            "product": {k: v for k, v in i["product"].items() if v is not None},
+            "consumedQuantity": float(i["consumed"]),
+            "currentQuantity": float(i["current"]),
+            "batches": i["batches"],
+        }
+        for i in ranking
+    ]
+
+
 class SpringGateway:
     def query(self, query, ctx):
         k = ctx.identity.kitchen_id
@@ -93,6 +207,32 @@ class SpringGateway:
             "itens_requisicao": f"/api/requisitions/{query.record_id}/items",
             "contagens": f"/api/inventories/{query.record_id}/counts",
         }
+        if resource == "consumo":
+            real = self._consumo_real(query, ctx, k)
+            if real is not None:
+                return real
+            lots = self._request(
+                "GET",
+                "/api/stock-batches",
+                ctx,
+                params={"kitchenId": k},
+                expected="lotes",
+            )
+            if not lots.ok:
+                return lots
+            rows = (
+                lots.data.get("content", [])
+                if isinstance(lots.data, dict)
+                else lots.data
+            )
+            ranking = consumo_por_produto(rows)
+            return result(
+                True,
+                "OK" if ranking else "VAZIO",
+                CONSUMO_AVISO,
+                ranking[: query.size],
+                incomplete=lots.incomplete,
+            )
         if resource == "fornecedores_recorrentes":
             lots = self._request(
                 "GET",
@@ -228,11 +368,13 @@ class SpringGateway:
                 p[numeric_field] = float(Decimal(str(p[numeric_field])))
         op = action.operation
         if op == Operation.REMOVE_ITEM:
-            return result(
-                False,
-                "INTEGRACAO_PENDENTE",
-                "A API documenta DELETE de item, mas não foi comprovada remoção lógica. Não executamos exclusão física.",
+            return self._request(
+                "DELETE",
+                f"/api/requisitions/{p['requisitionId']}/items/{p['itemId']}",
+                ctx,
             )
+        if op == Operation.EDIT_COUNT:
+            return self._replace_count(p, ctx)
         method, path = "POST", ""
         if op in {Operation.CREATE_PRODUCT, Operation.CREATE_SUPPLIER}:
             path = (
@@ -271,12 +413,8 @@ class SpringGateway:
             )
         elif op == Operation.ADD_COUNT:
             path = f"/api/inventories/{p.pop('inventoryId')}/counts"
-        else:
-            return result(
-                False,
-                "INTEGRACAO_PENDENTE",
-                "Não há endpoint documentado para alterar contagem. Não removemos/recriamos registros.",
-            )
+        else:  # pragma: no cover - toda operação conhecida tem rota
+            return result(False, "INTEGRACAO_PENDENTE", "Operação sem rota na API.")
         # Envio único: não inventar header de idempotência ou endpoint de delegação.
         created = {
             Operation.CREATE_PRODUCT,
@@ -295,6 +433,96 @@ class SpringGateway:
         )
         return self._request(
             method, path, ctx, body=p or None, allowed_statuses={expected_status}
+        )
+
+    def _consumo_real(self, query, ctx, kitchen):
+        """Saída real pelo histórico de movimentações; None se a API não o entregar."""
+        movimentos = self._request(
+            "GET",
+            "/api/stock-movements",
+            ctx,
+            params={
+                "kitchenId": kitchen,
+                "type": "WRITE_OFF",
+                "limit": LIMITE_DE_MOVIMENTOS,
+            },
+        )
+        if not movimentos.ok or not isinstance(movimentos.data, list):
+            return None
+        if not any(m.get("type") == "WRITE_OFF" for m in movimentos.data):
+            return None
+        produtos = self._request(
+            "GET", "/api/products", ctx, params={"page": 0, "size": 200}
+        )
+        linhas = []
+        if produtos.ok and isinstance(produtos.data, dict):
+            linhas = produtos.data.get("content", [])
+        extras = {
+            p["id"]: {"unit": p.get("unit"), "category": p.get("category")}
+            for p in linhas
+            if isinstance(p, dict) and isinstance(p.get("id"), int)
+        }
+        ranking = consumo_das_movimentacoes(movimentos.data, extras)
+        if not ranking:
+            return None
+        return result(True, "OK", CONSUMO_REAL, ranking[: query.size])
+
+    @staticmethod
+    def _detalhe_do_erro(response):
+        """Mensagem de negócio do Spring (RFC 7807: detail/title), sem segredos."""
+        try:
+            corpo = response.json()
+        except ValueError:
+            return ""
+        if not isinstance(corpo, dict):
+            return ""
+        texto = corpo.get("detail") or corpo.get("title") or corpo.get("message") or ""
+        return redact_secrets(str(texto))[:200]
+
+    def _replace_count(self, p, ctx):
+        """A API não tem PUT de contagem: troca por DELETE + POST, com rollback da antiga.
+
+        1. lê a contagem atual (para poder restaurá-la);
+        2. apaga a antiga e grava a nova;
+        3. se a nova falhar, grava a antiga de volta e diz claramente o que aconteceu.
+        """
+        base = f"/api/inventories/{p['inventoryId']}/counts"
+        atuais = self._request("GET", base, ctx, expected="contagens")
+        if not atuais.ok:
+            return atuais
+        rows = atuais.data if isinstance(atuais.data, list) else []
+        antiga = next((r for r in rows if r.get("id") == p["countId"]), None)
+        if antiga is None:
+            return result(
+                False, "NAO_ENCONTRADO", "Contagem não encontrada neste inventário."
+            )
+        original = {
+            "batchId": (antiga.get("batch") or {}).get("id", p["batchId"]),
+            "physicalQuantity": float(antiga["physicalQuantity"]),
+        }
+        nova = {"batchId": p["batchId"], "physicalQuantity": p["physicalQuantity"]}
+        for corpo, fonte in ((original, antiga), (nova, p)):
+            if fonte.get("note"):
+                corpo["note"] = fonte["note"]
+        apagada = self._request("DELETE", f"{base}/{p['countId']}", ctx)
+        if not apagada.ok:
+            return apagada
+        criada = self._request("POST", base, ctx, body=nova, allowed_statuses={201})
+        if criada.ok:
+            return criada
+        restaurada = self._request(
+            "POST", base, ctx, body=original, allowed_statuses={201}
+        )
+        if restaurada.ok:
+            return result(
+                False,
+                criada.code,
+                "A nova contagem não foi aceita pela API; a contagem original foi restaurada.",
+            )
+        return result(
+            False,
+            "RESULTADO_INCERTO",
+            "A contagem antiga foi removida e a nova não foi gravada. Confira o inventário.",
         )
 
     def _request(
@@ -329,10 +557,20 @@ class SpringGateway:
                     response.status_code >= 500 or 200 <= response.status_code < 300
                 ):
                     code = "RESULTADO_INCERTO"
+                detalhe = self._detalhe_do_erro(response)
+                logger.warning(
+                    "Spring %s %s -> HTTP %s (%s) %s",
+                    method,
+                    path,
+                    response.status_code,
+                    code,
+                    detalhe,
+                )
                 return result(
                     False,
                     code,
-                    "A API recusou a operação ou não confirmou o resultado.",
+                    "A API recusou a operação ou não confirmou o resultado."
+                    + (f" Motivo: {detalhe}" if detalhe else ""),
                 )
             data = (
                 None if response.status_code == 204 else redact_secrets(response.json())
@@ -353,9 +591,9 @@ class SpringGateway:
                 else []
             )
             required = {
-                "parametros_produto": {"kitchen", "minStock", "currentQuantity"},
+                "parametros_produto": {"kitchen", "currentQuantity"},
                 "fornecedores_produto": {"supplier"},
-                "estoque": {"currentQuantity", "minStock"},
+                "estoque": {"currentQuantity"},
                 "estoque_cozinha": {"product", "totalQuantity"},
                 "estoque_minimo": {"productId", "currentQuantity"},
                 "lotes": {"id", "product", "currentQuantity", "status"},
@@ -368,7 +606,7 @@ class SpringGateway:
                 },
                 "produtos": {"id", "name", "unit"},
                 "fornecedores": {"id", "legalName"},
-                "requisicoes": {"id", "status", "requester"},
+                "requisicoes": {"id", "status"},
                 "inventarios": {"id", "status"},
                 "contagens": {"id", "physicalQuantity"},
                 "itens_requisicao": {"id", "quantity"},
@@ -381,7 +619,8 @@ class SpringGateway:
                 if not isinstance(row, dict):
                     raise TypeError("Registro inválido")
                 if expected and not required[expected].issubset(row):
-                    raise ValueError("Campos obrigatórios da resposta ausentes")
+                    faltando = sorted(required[expected] - set(row))
+                    raise ValueError(f"campos ausentes em {expected}: {faltando}")
                 if "id" in row and (
                     isinstance(row["id"], bool) or not isinstance(row["id"], int)
                 ):
@@ -438,7 +677,14 @@ class SpringGateway:
                 "RESULTADO_INCERTO" if method != "GET" else "SERVICO_INDISPONIVEL",
                 "Comunicação interrompida. Escritas incertas não são repetidas automaticamente.",
             )
-        except (ValueError, TypeError, AttributeError):
+        except (ValueError, TypeError, AttributeError) as exc:
+            logger.warning(
+                "Spring %s %s: resposta rejeitada na validação (%s: %s)",
+                method,
+                path,
+                type(exc).__name__,
+                exc,
+            )
             return result(
                 False,
                 "RESULTADO_INCERTO" if method != "GET" else "RESPOSTA_INVALIDA",
@@ -585,9 +831,24 @@ class MockGateway:
             "itens_requisicao": "item",
             "contagens": "count",
         }
-        rows = self._rows(k, kinds.get(q.resource, "batch"))
+        kind = kinds.get(q.resource, "batch")
+        rows = self._rows(k, kind)
+        if kind == "batch":
+            # Como na API real, o produto do lote traz a unidade (nome/ID já vinham).
+            unidades = {p["id"]: p.get("unit") for p in self._rows(k, "product")}
+            rows = [
+                dict(r, product={**r["product"], "unit": unidades[r["product"]["id"]]})
+                if r.get("product")
+                and not r["product"].get("unit")
+                and unidades.get(r["product"]["id"])
+                else r
+                for r in rows
+            ]
         if q.resource == "cozinha":
             rows = [{"id": k, "name": "Cozinha DEMONSTRAÇÃO"}]
+        elif q.resource == "consumo":
+            unidades = {p["id"]: p.get("unit") for p in self._rows(k, "product")}
+            rows = consumo_por_produto(rows, unidades)
         elif q.resource == "fornecedores_recorrentes":
             frequencies = Counter((r.get("supplier") or {}).get("id") for r in rows)
             rows = [
@@ -644,7 +905,13 @@ class MockGateway:
             rows = [
                 r
                 for r in rows
-                if normalize(q.name) in normalize(r.get("name", r.get("legalName", "")))
+                if normalize(q.name)
+                in normalize(
+                    r.get(
+                        "name",
+                        r.get("legalName", (r.get("product") or {}).get("name", "")),
+                    )
+                )
             ]
         if q.status:
             rows = [r for r in rows if r.get("status") == q.status]
