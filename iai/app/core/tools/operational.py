@@ -35,7 +35,7 @@ from iai.app.core.inventra.domain import (
 
 @tool(args_schema=Query)
 def consultar_inventra(**parameters) -> str:
-    """Consulta produtos, estoque, lotes, validade, fornecedores, requisições, inventários, alertas e catálogos autorizados. Não altera dados. Para o saldo geral do estoque da cozinha use resource=estoque sem product_id; com product_id retorna os parâmetros e o saldo daquele produto. O resource=produtos é o catálogo global e exige name. O resource=consumo devolve o ranking dos produtos que mais saem (consumo estimado pelos lotes: quantidade inicial menos atual), do maior para o menor; nele a unidade vem em product.unit."""
+    """Consulta produtos, estoque, lotes, validade, fornecedores, requisições, inventários, alertas e catálogos autorizados. Não altera dados. Para o saldo geral do estoque da cozinha use resource=estoque sem product_id; com product_id retorna os parâmetros e o saldo daquele produto. O parâmetro name aceita nome parcial, no singular ou plural, sem acento e em qualquer ordem das palavras ("tomates" acha "Tomate Cereja"); não precisa do nome completo. Para achar algo que a cozinha TEM, use resource=estoque com name (ou lotes com name), não produtos. O resource=produtos é o catálogo global de cadastro, fora da cozinha, e exige name. O resource=consumo devolve o ranking dos produtos que mais saem (consumo estimado pelos lotes: quantidade inicial menos atual), do maior para o menor; nele a unidade vem em product.unit."""
     try:
         query = Query.model_validate(parameters)
         if query.resource == "produtos" and not (query.name or query.product_id):
