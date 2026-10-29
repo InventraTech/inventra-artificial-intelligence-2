@@ -902,7 +902,7 @@ def test_documentos_e_estoque_em_paralelo_com_jev_e_artefato_fiel(client, monkey
     from iai.app.core.tools import operational
     from iai.app.core.tools.documentos import buscar_documentos
     from iai.app.core.tools.operational import consultar_inventra
-    from tests_helpers import jev_evaluation
+    from tests_helpers import jev_fidelidade
 
     uploaded = client.post(
         "/arquivos",
@@ -979,13 +979,7 @@ def test_documentos_e_estoque_em_paralelo_com_jev_e_artefato_fiel(client, monkey
         "orquestrador_app",
         SimpleNamespace(invoke=lambda *args, **kwargs: AIMessage(content="Confirmado")),
     )
-    monkeypatch.setattr(
-        judge,
-        "evaluate",
-        lambda state: jev_evaluation(
-            fields=state["tool"]["schema"].get("properties", {})
-        ),
-    )
+    monkeypatch.setattr(judge, "evaluate_fidelidade", lambda state: jev_fidelidade())
     monkeypatch.setattr(
         artifacts,
         "choose_presentation",
@@ -1010,8 +1004,9 @@ def test_documentos_e_estoque_em_paralelo_com_jev_e_artefato_fiel(client, monkey
     assert {c["tool"] for c in metric["jev"]} == {
         "consultar_inventra",
         "buscar_documentos",
+        "resposta_final",
     }
-    assert all(c["status"] == "EXECUTED" for c in metric["jev"])
+    assert {c["status"] for c in metric["jev"]} == {"EXECUTED", "APPROVE"}
 
 
 def test_vision_adapter_sends_validated_image_and_requires_structured_result(

@@ -14,7 +14,7 @@ from iai.app.core.infra.security import current_context
 from iai.app.core.infra.storage import get_db
 from iai.app.core.inventra.domain import Operation
 from iai.app.core.tools.operational import PROPOSAL_TOOLS, consultar_inventra
-from tests_helpers import context_for, jev_evaluation
+from tests_helpers import context_for, jev_evaluation, jev_fidelidade
 
 
 class ScriptedModel(FakeMessagesListChatModel):
@@ -220,6 +220,7 @@ def test_partial_proposal_preserves_user_question_without_exposing_jev(monkeypat
                         }
                     ],
                 ),
+                AIMessage(content="Registrei o que consegui."),
             ]
         ),
         tools=[proposal],
@@ -260,32 +261,13 @@ def test_partial_proposal_preserves_user_question_without_exposing_jev(monkeypat
         current_context.reset(marker)
     assert "AGUARDANDO_APROVACAO" in answer and "quantidade e a unidade" in answer
     assert "JEV" not in answer and "RETRY_SPECIALIST" not in answer
-    assert get_db().approvals.count_documents({}) == 1
+    # A proposta reprovada nasce pendente, mas é cancelada antes de o usuário vê-la.
+    assert get_db().approvals.count_documents({"judge_cancelled": {"$ne": True}}) == 1
+    assert get_db().approvals.count_documents({"judge_cancelled": True}) == 1
     assert get_db().execution_mock.count_documents({}) == 0
 
 
-def test_live_missing_typesafe_key_blocks_tool(monkeypatch):
-    from pydantic import SecretStr
-
-    monkeypatch.setattr(judge, "TYPESAFE_API_KEY", SecretStr(""))
-    agent = create_agent(
-        ScriptedModel(
-            responses=[
-                AIMessage(
-                    content="",
-                    tool_calls=[
-                        {
-                            "id": "blocked",
-                            "name": "consultar_inventra",
-                            "args": {"resource": "lotes"},
-                        }
-                    ],
-                )
-            ]
-        ),
-        tools=[consultar_inventra],
-        middleware=[JevToolGate("estoquista", [consultar_inventra])],
-    )
+def prepara_especialista(monkeypatch, agent):
     monkeypatch.setattr(graph, "LLM_MODE", "live")
     monkeypatch.setattr(graph, "estoquista_app", agent)
     monkeypatch.setattr(graph, "guardrail_insulto", lambda text: {"bloqueado": False})
@@ -299,18 +281,188 @@ def test_live_missing_typesafe_key_blocks_tool(monkeypatch):
             }
         ),
     )
-    marker = current_context.set(replace(context_for(), turn_id="missing-jev"))
+    monkeypatch.setattr(
+        graph,
+        "orquestrador_app",
+        SimpleNamespace(
+            invoke=lambda entrada: AIMessage(
+                content=entrada["mensagens"].split(": ", 1)[1]
+            )
+        ),
+    )
+
+
+def test_proposta_reprovada_e_refeita_chega_ao_usuario_uma_so_vez(monkeypatch):
+    proposal = PROPOSAL_TOOLS[Operation.CONSUME]
+    chamada = AIMessage(
+        content="",
+        tool_calls=[
+            {
+                "id": "saida",
+                "name": proposal.name,
+                "args": {
+                    "batchId": 1,
+                    "quantity": "10",
+                    "justification": "Consumo informado",
+                },
+            }
+        ],
+    )
+    agent = create_agent(
+        ScriptedModel(
+            responses=[
+                chamada,
+                AIMessage(content="Proposta criada."),
+                chamada.model_copy(update={"id": None}),
+                AIMessage(content="Proposta refeita."),
+            ]
+        ),
+        tools=[proposal],
+        middleware=[JevToolGate("estoquista", [proposal])],
+    )
+    prepara_especialista(monkeypatch, agent)
+    decisoes = iter(
+        [
+            jev_evaluation(
+                failed={"arguments_grounded": 0.1},
+                route="agent_repair",
+                fields=["batchId", "quantity", "justification"],
+            ),
+            jev_evaluation(fields=["batchId", "quantity", "justification"]),
+        ]
+    )
+    monkeypatch.setattr(judge, "evaluate", lambda state: next(decisoes))
+    marker = current_context.set(replace(context_for(), turn_id="refeita"))
     try:
-        answer = graph.executar_fluxo_assessor(
-            "Mostre os lotes.", "missing-jev", "demo-estoquista"
+        answer = graph.executar_fluxo_chat(
+            "Usei 10 kg de arroz.", "refeita", "demo-estoquista"
         )
     finally:
         current_context.reset(marker)
-    assert "indisponível" in answer and "JEV" not in answer
-    assert get_db().business_mock.count_documents({}) == 0
+    assert "AGUARDANDO_APROVACAO" in answer.resposta
+    assert len(answer.pending_actions) == 1
+    assert get_db().approvals.count_documents({"judge_cancelled": {"$ne": True}}) == 1
+    assert get_db().approvals.count_documents({"judge_cancelled": True}) == 1
+    assert get_db().execution_mock.count_documents({}) == 0
+    assert "Revisão interna" not in answer.resposta
+
+
+def test_resposta_de_leitura_reprovada_e_refeita_com_o_dado_da_tool(monkeypatch):
+    agent = create_agent(
+        ScriptedModel(
+            responses=[
+                AIMessage(
+                    content="",
+                    tool_calls=[
+                        {
+                            "id": "read",
+                            "name": "consultar_inventra",
+                            "args": {"resource": "lotes"},
+                        }
+                    ],
+                ),
+                AIMessage(content="O arroz tem 99999 unidades."),
+                AIMessage(content="Há lotes cadastrados."),
+            ]
+        ),
+        tools=[consultar_inventra],
+        middleware=[JevToolGate("estoquista", [consultar_inventra])],
+    )
+    prepara_especialista(monkeypatch, agent)
+    decisoes = iter(
+        [jev_fidelidade(failed={"quantities_supported": 0.1}), jev_fidelidade()]
+    )
+    monkeypatch.setattr(judge, "evaluate_fidelidade", lambda state: next(decisoes))
+    marker = current_context.set(replace(context_for(), turn_id="leitura-refeita"))
+    try:
+        answer = graph.executar_fluxo_assessor(
+            "Mostre os lotes.", "leitura-refeita", "demo-estoquista"
+        )
+    finally:
+        current_context.reset(marker)
+    assert "Há lotes cadastrados." in answer and "99999" not in answer
     metric = get_db().metrics.find_one({})
-    assert metric["status"] == "erro" and metric["jev"][0]["status"] == "REJECT"
+    revisoes = [c for c in metric["jev"] if c["tool"] == "resposta_final"]
+    assert [c["decision"] for c in revisoes] == ["RETRY_SPECIALIST", "APPROVE"]
+
+
+def test_live_missing_typesafe_key_cancels_the_proposal(monkeypatch):
+    from pydantic import SecretStr
+
+    monkeypatch.setattr(judge, "TYPESAFE_API_KEY", SecretStr(""))
+    proposal = PROPOSAL_TOOLS[Operation.CONSUME]
+    agent = create_agent(
+        ScriptedModel(
+            responses=[
+                AIMessage(
+                    content="",
+                    tool_calls=[
+                        {
+                            "id": "blocked",
+                            "name": proposal.name,
+                            "args": {
+                                "batchId": 1,
+                                "quantity": "10",
+                                "justification": "Consumo informado",
+                            },
+                        }
+                    ],
+                ),
+                AIMessage(content="Proposta criada."),
+            ]
+        ),
+        tools=[proposal],
+        middleware=[JevToolGate("estoquista", [proposal])],
+    )
+    prepara_especialista(monkeypatch, agent)
+    marker = current_context.set(replace(context_for(), turn_id="missing-jev"))
+    try:
+        answer = graph.executar_fluxo_chat(
+            "Usei 10 kg de arroz.", "missing-jev", "demo-estoquista"
+        )
+    finally:
+        current_context.reset(marker)
+    assert "indisponível" in answer.resposta and "JEV" not in answer.resposta
+    assert answer.pending_actions == []
+    assert get_db().approvals.count_documents({"judge_cancelled": {"$ne": True}}) == 0
+    assert get_db().execution_mock.count_documents({}) == 0
+    metric = get_db().metrics.find_one({})
+    assert metric["status"] == "erro" and metric["jev"][-1]["status"] == "REJECT"
     assert "arguments" not in str(metric["jev"])
+
+
+def test_live_missing_typesafe_key_still_answers_reads(monkeypatch):
+    from pydantic import SecretStr
+
+    monkeypatch.setattr(judge, "TYPESAFE_API_KEY", SecretStr(""))
+    agent = create_agent(
+        ScriptedModel(
+            responses=[
+                AIMessage(
+                    content="",
+                    tool_calls=[
+                        {
+                            "id": "read",
+                            "name": "consultar_inventra",
+                            "args": {"resource": "lotes"},
+                        }
+                    ],
+                ),
+                AIMessage(content="Há lotes cadastrados."),
+            ]
+        ),
+        tools=[consultar_inventra],
+        middleware=[JevToolGate("estoquista", [consultar_inventra])],
+    )
+    prepara_especialista(monkeypatch, agent)
+    marker = current_context.set(replace(context_for(), turn_id="read-no-jev"))
+    try:
+        answer = graph.executar_fluxo_assessor(
+            "Mostre os lotes.", "read-no-jev", "demo-estoquista"
+        )
+    finally:
+        current_context.reset(marker)
+    assert "Há lotes cadastrados." in answer
 
 
 def test_live_direct_call_cannot_bypass_middleware(monkeypatch):
@@ -333,8 +485,8 @@ def test_live_direct_call_cannot_bypass_middleware(monkeypatch):
     assert get_db().business_mock.count_documents({}) == 0
 
 
-def test_pergunta_de_faq_percorre_o_grafo_e_mantem_jev_individual(monkeypatch):
-    """Busca FAQ determinística passa pelo JEV; o modelo apenas redige."""
+def test_pergunta_de_faq_percorre_o_grafo_e_o_jev_confere_o_texto(monkeypatch):
+    """Busca FAQ determinística; o modelo redige e o JEV confere o texto contra o trecho."""
     monkeypatch.setattr(graph, "LLM_MODE", "live")
     monkeypatch.setattr(graph, "guardrail_insulto", lambda text: {"bloqueado": False})
     monkeypatch.setattr(graph, "guardrail_escopo", lambda text: {"bloqueado": False})
@@ -350,9 +502,9 @@ def test_pergunta_de_faq_percorre_o_grafo_e_mantem_jev_individual(monkeypatch):
 
     def evaluate(state):
         seen.append(state)
-        return jev_evaluation(fields=state["tool"]["schema"].get("properties", {}))
+        return jev_fidelidade()
 
-    monkeypatch.setattr(judge, "evaluate", evaluate)
+    monkeypatch.setattr(judge, "evaluate_fidelidade", evaluate)
     monkeypatch.setattr(
         graph,
         "llm_especialista",
@@ -367,6 +519,6 @@ def test_pergunta_de_faq_percorre_o_grafo_e_mantem_jev_individual(monkeypatch):
         )
     finally:
         current_context.reset(marker)
-    assert len(seen) == 1 and seen[0]["tool"]["name"] == "faq_retriever"
+    assert len(seen) == 1 and seen[0]["evidence"][0]["tool"] == "faq_retriever"
     assert "O OCR lê a foto do produto." in answer
     assert "JEV" not in answer and "confirmar" not in answer

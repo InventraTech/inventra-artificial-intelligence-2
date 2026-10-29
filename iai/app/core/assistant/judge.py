@@ -1,4 +1,4 @@
-"""Cliente REST TypeSafe e política tipada do juiz PRÉ-tool. Não gera texto.
+"""Cliente REST TypeSafe e política tipada do juiz do turno. Não gera texto.
 
 Contrato: https://docs.typesafe.ai/api/system-one
 HTTP direto reaproveita httpx; não é necessário adicionar SDK.
@@ -101,11 +101,10 @@ def questions(fields: list[str]):
     return result
 
 
-def evaluate(state: dict) -> Evaluation:
-    """Uma requisição, perguntas atômicas, sem retry de escrita ou fail-open."""
+def consultar(state: dict, query: dict) -> Evaluation:
+    """Uma requisição ao JEV com as perguntas dadas. Sem retry e sem fail-open."""
     if not TYPESAFE_API_KEY.get_secret_value():
         raise JevUnavailable("JEV_NOT_CONFIGURED")
-    query = questions(list(state["tool"]["schema"].get("properties", {})))
 
     def redact(value):
         if isinstance(value, dict):
@@ -132,6 +131,18 @@ def evaluate(state: dict) -> Evaluation:
         parsed = Evaluation.model_validate(response.json())
         if set(parsed.answers) != set(query):
             raise ValueError("Perguntas incompletas.")
+        return parsed
+    except JevUnavailable:
+        raise
+    except (httpx.HTTPError, ValueError, KeyError, TypeError):
+        raise JevUnavailable("JEV_INVALID_OR_UNAVAILABLE") from None
+
+
+def evaluate(state: dict) -> Evaluation:
+    """Julga uma proposta de escrita: dez perguntas atômicas e duas de diagnóstico."""
+    query = questions(list(state["tool"]["schema"].get("properties", {})))
+    parsed = consultar(state, query)
+    try:
         for key in (*POSITIVE, *RISKS):
             if not isinstance(parsed.answers[key], Noul):
                 raise TypeError("Tipo incorreto.")
@@ -141,11 +152,47 @@ def evaluate(state: dict) -> Evaluation:
                 query[key]["criteria"]
             ):
                 raise ValueError("Opções incorretas.")
-        return parsed
-    except JevUnavailable:
-        raise
-    except (httpx.HTTPError, ValueError, KeyError, TypeError):
+    except (ValueError, KeyError, TypeError):
         raise JevUnavailable("JEV_INVALID_OR_UNAVAILABLE") from None
+    return parsed
+
+
+# Texto de leitura e FAQ: o texto final só pode afirmar o que a evidência do turno sustenta.
+FIDELIDADE = {
+    "products_supported": "Does every product, supplier, batch or requisition named in the answer appear in the evidence or in the user's request? If the answer names none, this is true.",
+    "quantities_supported": "Does every quantity, unit, price or count in the answer appear in the evidence or in the user's request, or follow from them by simple arithmetic? If the answer has none, this is true.",
+    "dates_supported": "Does every date or deadline in the answer appear in the evidence or in the user's request? If the answer has none, this is true.",
+    "no_unverified_claims": "Does the answer avoid claiming that a change was made, or that a record exists, without support in the evidence?",
+}
+
+
+def questions_fidelidade():
+    return {
+        key: {"type": "noul", "instructions": question}
+        for key, question in FIDELIDADE.items()
+    }
+
+
+def evaluate_fidelidade(state: dict) -> Evaluation:
+    parsed = consultar(state, questions_fidelidade())
+    if not all(isinstance(parsed.answers[key], Noul) for key in FIDELIDADE):
+        raise JevUnavailable("JEV_INVALID_OR_UNAVAILABLE")
+    return parsed
+
+
+def policy_fidelidade(evaluation: Evaluation, threshold=JEV_APPROVAL_THRESHOLD):
+    checks = {}
+    for key in FIDELIDADE:
+        value = evaluation.answers.get(key)
+        if not isinstance(value, Noul):
+            raise JevUnavailable("JEV_INVALID_ANSWERS")
+        checks[key] = value.noul
+    failed = [key for key, value in checks.items() if value < threshold]
+    return Decision(
+        decision="RETRY_SPECIALIST" if failed else "APPROVE",
+        checks=checks,
+        failed_checks=failed,
+    )
 
 
 def policy(

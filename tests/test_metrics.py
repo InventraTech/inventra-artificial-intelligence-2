@@ -205,3 +205,66 @@ def test_registro_guarda_so_dados_tecnicos(monkeypatch):
     assert doc["kitchen_id"] == identity.kitchen_id
     assert doc["agentes_chamados"] == ["juiz", "juiz"]
     assert "motivo-privado" not in str(doc)
+
+
+def _chamada_jev(ms, decision="APPROVE", entrada=1_000_000, erro=None):
+    chamada = {
+        "id": str(uuid4()),
+        "decision": decision,
+        "duration_ms": ms,
+        "model": "jev-1",
+        "usage": {"input_tokens": entrada, "output_tokens": 3},
+    }
+    if erro:
+        chamada["error_type"] = erro
+    return chamada
+
+
+def test_registro_conta_custo_e_latencia_do_jev(monkeypatch):
+    from iai.app.core.infra.storage import get_db
+
+    identity = context_for("demo-comprador").identity
+    chamadas = {c["id"]: c for c in (_chamada_jev(400), _chamada_jev(600, "REJECT"))}
+    m.registrar_requisicao(
+        m.ColetorMetricas(),
+        0.0,
+        "sessao-jev",
+        identity,
+        {"agentes_chamados": ["jev:concluido"], "jev_calls": chamadas},
+        falhou=False,
+    )
+    doc = get_db().metrics.find_one({"session_id": "sessao-jev"})
+    # 2 milhões de tokens de entrada x US$ 0,042 por milhão; a saída não é cobrada.
+    assert doc["custo_usd"] == pytest.approx(0.084)
+    assert doc["tokens_entrada"] == 2_000_000
+    assert [j["custo_usd"] for j in doc["jev"]] == pytest.approx([0.042, 0.042])
+
+
+def test_gerar_metricas_inclui_jev_no_custo_e_na_latencia(monkeypatch):
+    turno = _turno(custo=0.01)
+    turno["jev"] = [
+        _chamada_jev(100) | {"custo_usd": 0.042},
+        _chamada_jev(300, "REJECT") | {"custo_usd": 0.042},
+        _chamada_jev(900, "REJECT", erro="TimeoutException") | {"custo_usd": 0.0},
+    ]
+    turno["custo_usd"] = 0.01 + 0.084
+    monkeypatch.setattr(m, "col_metricas", _ColFalsa([turno]))
+
+    r = m.gerar_metricas()
+
+    assert r.jev.chamadas == 3
+    assert r.jev.reprovacoes == 2
+    assert r.jev.indisponiveis == 1
+    assert r.jev.latencia_media_ms == 433
+    assert r.jev.latencia_p95_ms == 900
+    assert r.jev.custo_usd == pytest.approx(0.084)
+    assert r.custo.total_usd == pytest.approx(0.094)
+    assert r.resolucao.custo_por_resolucao_usd == pytest.approx(0.094)
+    assert [x.modelo for x in r.custo.por_modelo] == ["gemini-2.5-flash", "jev-1"]
+
+
+def test_gerar_metricas_aceita_turnos_antigos_sem_jev(turnos_exemplo):
+    r = m.gerar_metricas()
+    assert r.jev.chamadas == 0
+    assert r.jev.custo_usd == 0.0
+    assert r.jev.latencia_p95_ms == 0

@@ -6,10 +6,12 @@ propostas de alteração confirmadas pelo próprio solicitante autenticado. Esta
 Para compreender a arquitetura, as regras essenciais e os limites reais antes de trabalhar no código,
 consulte [Contexto da IAI para outras IAs](CONTEXTO_TECNICO_IA_ATUAL.md).
 
-O chat **live** usa o [gate JEV pré-execução de tools](iai/app/core/assistant/tool_gate.py).
-Cada chamada é registrada e validada antes de executar. `JEV_ESCOPO=escrita` (padrão)
-consulta o JEV nas propostas; `todas` inclui também as leituras. Isso não substitui a aprovação
-humana das alterações de negócio. Configure `TYPESAFE_API_KEY` para as chamadas que exigem JEV.
+O chat **live** valida cada tool localmente antes de executar ([gate](iai/app/core/assistant/tool_gate.py))
+e passa o turno pelo JEV depois do especialista e antes da resposta chegar ao usuário
+([revisão](iai/app/core/assistant/revisao.py)): uma chamada ao JEV por turno. Em turnos de escrita ele julga
+cada proposta (`propor_*`); em leituras e FAQ, o texto final contra o que as tools devolveram. Reprovada, a proposta
+é cancelada e o especialista roda de novo uma vez com os critérios que falharam. Isso não substitui a aprovação
+humana das alterações de negócio. Configure `TYPESAFE_API_KEY`; sem ela a escrita fica indisponível e a leitura segue sem o juiz.
 O demo determinístico continua disponível sem JEV real.
 
 ## Executar localmente
@@ -118,10 +120,10 @@ O histórico continua textual; os artefatos não são persistidos como visualiza
 
 Leituras independentes de `consultar_inventra`, `faq_retriever`, `buscar_historico` e `buscar_documentos` podem ser emitidas
 no mesmo lote e executadas com concorrência máxima de quatro. O `ToolNode` faz fan-in antes de
-retomar o especialista. Cada chamada live conserva o gate; leituras consultam o JEV com `JEV_ESCOPO=todas`. Evidências
+retomar o especialista. Cada chamada live conserva o gate local; o JEV julga o turno depois. Evidências
 são uma fotografia anterior ao lote, e permissões de uso único permanecem isoladas por contexto.
 Lotes com proposta são processados uma etapa por vez; criação, confirmação e execução são sequenciais.
-Falhas de fontes complementares podem produzir resposta parcial, sem executar a chamada rejeitada.
+Falhas de fontes complementares podem produzir resposta parcial.
 
 `pending_actions` é separado dos artefatos visuais e contém ID, hash, operação, parâmetros,
 justificativa, estado, prazo e snapshot dos alvos. Confirme com o próprio usuário autenticado:
@@ -290,8 +292,7 @@ a demonstração offline. Não publique o arquivo `.env` local.
 | INVENTRA_HTTP_TIMEOUT | segundos; padrão 10 |
 | MONGO_CONNECTION | MongoDB; não inclua credenciais no Git |
 | GEMINI_API_KEY / GROQ_API_KEY | provedores para agentes live |
-| TYPESAFE_API_KEY | TypeSafe/JEV para autorizar tools dos agentes live; falha bloqueia execução |
-| JEV_ESCOPO | `escrita` (padrão): JEV nas propostas; `todas`: também nas leituras. Ambos mantêm as validações locais do gate |
+| TYPESAFE_API_KEY | TypeSafe/JEV que julga o turno dos agentes live; sem ele ou fora do ar, a escrita é cancelada (falha fechada) e a leitura segue sem o juiz |
 | QDRANT_URL / QDRANT_API_KEY | serviço Qdrant para documentos; sem configuração, upload/listagem respondem 503 e o restante funciona |
 | QDRANT_COLLECTION / EMBEDDING_MODEL / EMBEDDING_DIM | `inventra_documentos`, `gemini-embedding-001`, 768; outra dimensão exige coleção compatível |
 | ARQUIVOS_MAX_BYTES / ARQUIVOS_MAX_POR_ENVIO / ARQUIVOS_MAX_POR_USUARIO / ARQUIVOS_MAX_CARACTERES | 10 MB, 10 por envio, 50 por usuário, 120 mil caracteres por arquivo |
@@ -319,8 +320,7 @@ A página de aprovação está em outro repositório e não foi criada aqui.
 A branch `fix/human-in-the-loop` incorpora os commits `d9b3023` (#22) e `ae7155c` (#23).
 Mantém artefatos, confirmação do solicitante e paralelismo, adaptando o ponto de entrada
 `inventra/acoes.py` ao serviço durável de propostas. Na revisão do PR #24, foi restaurado
-`JEV_ESCOPO=escrita` como padrão, com `todas` disponível. O FAQ usa busca determinística autorizada e fallback literal
-se o modelo falhar, sem dispensar o gate. Detalhes em [CONSOLIDACAO_MAIN.md](CONSOLIDACAO_MAIN.md).
+o JEV passou a julgar o turno depois do especialista. O FAQ usa busca determinística e, se o modelo falhar ou o JEV reprovar o texto, devolve o trecho literal da documentação. Detalhes em [CONSOLIDACAO_MAIN.md](CONSOLIDACAO_MAIN.md).
 
 ## Testes
 
@@ -369,6 +369,7 @@ GET /metrics?periodo=mes&usuarios=50&usuarios=5000   # cenários customizados (p
 | Custo / retorno (ROI) | `roi.retorno_usd`, `roi.roi` |
 | Custo por resolução | `resolucao.custo_por_resolucao_usd` (+ `resolucao.taxa_resolucao`) |
 | Custo observado | `custo.total_usd`, `custo.medio_por_requisicao_usd`, `custo.por_modelo[]` |
+| Latência e custo do JEV | `jev.latencia_media_ms`, `jev.latencia_p95_ms`, `jev.custo_usd`, `jev.reprovacoes` |
 | Premissas usadas | `premissas` (para o front exibir junto dos números) |
 
 Fluxo dos dados:
@@ -390,9 +391,13 @@ Definições:
 - **Resolvida** = especialista terminou com execução autorizada de tool, sem parada do gate
   nem falha de execução (`jev:concluido`). Não comprova fidelidade de toda a redação final.
   O marcador `juiz:aprovado` continua reconhecido somente para compatibilidade com métricas legadas.
-- **JEV:** decisões e eventos técnicos ficam nos documentos da coleção de métricas, sem
-  argumentos ou conteúdo da conversa; não alteram o contrato público de `/metrics`.
-  Seu custo ainda não está incluído na estimativa financeira LLM; o uso retornado é registrado.
+- **JEV:** cada julgamento fica no documento da requisição (decisão, critérios que falharam,
+  duração, modelo e tokens), sem argumentos ou conteúdo da conversa. O `/metrics` mostra a
+  seção `jev` (chamadas, reprovações, indisponibilidades, latência média e p95, tokens e custo) e
+  soma o custo do JEV ao `custo.total_usd`, ao custo por resolução, ao ROI e às projeções. O preço
+  (`PRECO_JEV_USD_POR_MILHAO`, em `config.py`) é o divulgado pela TypeSafe, US$ 0,042 por milhão de
+  tokens de entrada, saída não cobrada; confira na TypeSafe antes de usar como número oficial. A
+  latência do JEV já está dentro do tempo do nó do especialista e do total da requisição.
 - **Projeção** = usuários × `requisicoes_por_usuario_semana` × semanas do período (1 para semana,
   52/12 para mês) × custo médio por requisição **observado**. Sem tráfego registrado, vem zerada.
 - **Premissas** (`config.py`): preços por modelo (conferir nas tabelas oficiais),

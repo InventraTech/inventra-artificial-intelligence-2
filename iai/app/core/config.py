@@ -64,6 +64,9 @@ PRECOS_MODELOS_USD_POR_MILHAO: dict[str, tuple[float, float]] = {
     "openai/gpt-oss-20b": (0.075, 0.30),
     "openai/gpt-oss-safeguard-20b": (0.075, 0.30),
 }
+# JEV (TypeSafe): US$ 0,042 por milhão de tokens de entrada; a saída (probabilidades) não é cobrada.
+# Valor divulgado pela TypeSafe, sem página de preços própria: confira antes de usar como custo oficial.
+PRECO_JEV_USD_POR_MILHAO: tuple[float, float] = (0.042, 0.0)
 
 REQUISICOES_POR_USUARIO_SEMANA = float(os.getenv("METRICAS_REQ_USUARIO_SEMANA", "10"))
 VALOR_POR_RESOLUCAO_USD = float(os.getenv("METRICAS_VALOR_RESOLUCAO_USD", "1.50"))

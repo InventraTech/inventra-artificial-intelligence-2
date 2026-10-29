@@ -7,7 +7,7 @@ from langchain_core.language_models.fake_chat_models import FakeMessagesListChat
 from langchain_core.messages import AIMessage, HumanMessage
 from langchain_core.tools import tool
 
-from iai.app.core.assistant import judge, tool_gate
+from iai.app.core.assistant import judge
 from iai.app.core.assistant.tool_gate import JevToolGate, live_tool_scope, protect_tool
 from iai.app.core.infra.security import context, current_context
 from iai.app.extras.demo import plan_demo_reads
@@ -50,19 +50,9 @@ def run(app, token="demo-estoquista"):
         current_context.reset(marker)
 
 
-@pytest.mark.parametrize("scope", ["escrita", "todas"])
-def test_live_fanout_overlaps_both_judgment_and_tools_and_fanin_preserves_context(
-    monkeypatch,
-    scope,
-):
-    monkeypatch.setattr(tool_gate, "JEV_ESCOPO", scope)
-    judgment_barrier, tool_barrier = Barrier(2), Barrier(2)
-    observed, evaluations = [], []
-
-    def evaluate(state):
-        evaluations.append(state)
-        judgment_barrier.wait(timeout=5)
-        return jev_evaluation(fields=state["tool"]["schema"].get("properties", {}))
+def test_live_fanout_overlaps_tools_and_fanin_preserves_context():
+    tool_barrier = Barrier(2)
+    observed = []
 
     def record(name):
         ctx = context()
@@ -104,10 +94,9 @@ def test_live_fanout_overlaps_both_judgment_and_tools_and_fanin_preserves_contex
         ],
         tools,
     )
-    monkeypatch.setattr(judge, "evaluate", evaluate)
     result = run(app)
+    # As duas leituras só passam da barreira se rodarem ao mesmo tempo.
     assert len(observed) == 2
-    assert len(evaluations) == (2 if scope == "todas" else 0)
     assert all(
         v[1:]
         == (
@@ -119,7 +108,6 @@ def test_live_fanout_overlaps_both_judgment_and_tools_and_fanin_preserves_contex
         )
         for v in observed
     )
-    assert all(s["evidence"] == [] for s in evaluations)  # fotografia anterior ao lote
     assert {m.name for m in result["messages"] if m.type == "tool"} == {
         "consultar_inventra",
         "faq_retriever",
@@ -128,38 +116,30 @@ def test_live_fanout_overlaps_both_judgment_and_tools_and_fanin_preserves_contex
     assert len(result["jev_calls"]) == 2
     assert all(c["status"] == "EXECUTED" for c in result["jev_calls"].values())
     assert result["jev_parallel"] is True
-    assert all(
-        (record.get("jev_dispensado") == "leitura") == (scope == "escrita")
-        for record in result["jev_calls"].values()
-    )
+    assert all(c["validacao_local"] is True for c in result["jev_calls"].values())
 
 
 @pytest.mark.parametrize("essential_fails", [False, True])
-def test_partial_source_failure_preserves_success_without_executing_rejected_tool(
-    monkeypatch, essential_fails
-):
+def test_partial_source_failure_preserves_the_successful_read(essential_fails):
     invoked = []
+    failed = "consultar_inventra" if essential_fails else "faq_retriever"
 
     @tool
     def consultar_inventra(resource: str) -> str:
         """Consulta estoque."""
+        if failed == "consultar_inventra":
+            raise RuntimeError("serviço fora do ar")
         invoked.append("consultar_inventra")
         return '{"ok":true,"saldo":12}'
 
     @tool
     def faq_retriever(question: str) -> str:
         """Consulta FAQ."""
+        if failed == "faq_retriever":
+            raise RuntimeError("serviço fora do ar")
         invoked.append("faq_retriever")
         return "FAQ disponível"
 
-    failed = "consultar_inventra" if essential_fails else "faq_retriever"
-
-    def evaluate(state):
-        if state["tool"]["name"] == failed:
-            raise judge.JevUnavailable("JEV_TEST_UNAVAILABLE")
-        return jev_evaluation(fields=state["tool"]["schema"].get("properties", {}))
-
-    monkeypatch.setattr(judge, "evaluate", evaluate)
     final = (
         "Não foi possível confirmar estoque; FAQ disponível"
         if essential_fails
@@ -183,7 +163,7 @@ def test_partial_source_failure_preserves_success_without_executing_rejected_too
     assert failed not in invoked and len(invoked) == 1
     assert result["messages"][-1].content == final
     assert not result.get("jev_halt")
-    assert {c["status"] for c in result["jev_calls"].values()} == {"EXECUTED", "REJECT"}
+    assert {c["status"] for c in result["jev_calls"].values()} == {"EXECUTED", "FAILED"}
 
 
 def test_mixed_proposal_batch_is_sequenced_before_any_mutation(monkeypatch):

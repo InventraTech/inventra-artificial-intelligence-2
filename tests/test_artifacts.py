@@ -275,7 +275,7 @@ def test_full_live_graph_builds_one_artifact_only_from_gate_authorized_result(
     from iai.app.core.assistant.tool_gate import JevToolGate
     from iai.app.core.tools.faq import faq_retriever
     from iai.app.core.tools.operational import consultar_inventra
-    from tests_helpers import jev_evaluation
+    from tests_helpers import jev_fidelidade
 
     class Model(FakeMessagesListChatModel):
         def bind_tools(self, tools, **kwargs):
@@ -324,13 +324,7 @@ def test_full_live_graph_builds_one_artifact_only_from_gate_authorized_result(
         "orquestrador_app",
         SimpleNamespace(invoke=lambda *args, **kw: AIMessage(content="Confirmado")),
     )
-    monkeypatch.setattr(
-        judge,
-        "evaluate",
-        lambda state: jev_evaluation(
-            fields=state["tool"]["schema"].get("properties", {})
-        ),
-    )
+    monkeypatch.setattr(judge, "evaluate_fidelidade", lambda state: jev_fidelidade())
     monkeypatch.setattr(
         a, "choose_presentation", lambda *args, **kw: a.PresentationChoice(kind="bar")
     )
@@ -338,9 +332,10 @@ def test_full_live_graph_builds_one_artifact_only_from_gate_authorized_result(
     (artifact,) = result["artifacts"]
     assert artifact["datasets"][0]["data"] == [50, 100, 5]
     metric = get_db().metrics.find_one({})
-    assert len(metric["jev"]) == 2 and all(
-        c["status"] == "EXECUTED" for c in metric["jev"]
-    )
+    assert len(metric["jev"]) == 3 and {c["status"] for c in metric["jev"]} == {
+        "EXECUTED",
+        "APPROVE",
+    }
 
 
 def test_grouped_requisition_bar_and_category_pie_are_derived_counts():

@@ -6,7 +6,7 @@ from langchain_core.language_models.fake_chat_models import FakeMessagesListChat
 from langchain_core.messages import AIMessage, HumanMessage
 from langchain_core.tools import tool
 
-from iai.app.core.assistant import judge, tool_gate
+from iai.app.core.assistant import judge
 from iai.app.core.assistant.tool_gate import JevToolGate, live_tool_scope, protect_tool
 from iai.app.core.infra.security import current_context
 from iai.app.core.infra.storage import get_db
@@ -14,7 +14,7 @@ from iai.app.core.inventra.domain import Operation
 from iai.app.core.tools.faq import faq_retriever
 from iai.app.core.tools.memoria import buscar_historico
 from iai.app.core.tools.operational import PROPOSAL_TOOLS
-from tests_helpers import context_for, jev_evaluation
+from tests_helpers import context_for
 
 
 class ScriptedModel(FakeMessagesListChatModel):
@@ -63,16 +63,15 @@ def make_agent(responses, tools, name="estoquista"):
     )
 
 
-def approve(monkeypatch):
-    seen = []
+@pytest.fixture(autouse=True)
+def sem_jev(monkeypatch):
+    """O gate valida localmente; o JEV só entra depois do especialista (revisao.py)."""
 
-    def evaluate(state):
-        seen.append(state)
-        assert state["candidate"]["status"] == "PENDING_JEV"
-        return jev_evaluation(fields=state["tool"]["schema"].get("properties", {}))
+    def proibido(*args, **kwargs):
+        pytest.fail("O gate não deve chamar o JEV.")
 
-    monkeypatch.setattr(judge, "evaluate", evaluate)
-    return seen
+    monkeypatch.setattr(judge, "evaluate", proibido)
+    monkeypatch.setattr(judge, "consultar", proibido)
 
 
 def invoke(agent, text="Consulte o arroz"):
@@ -81,17 +80,11 @@ def invoke(agent, text="Consulte o arroz"):
     )
 
 
-def test_pending_state_precedes_judgment_and_tool_executes_once(
-    monkeypatch, authenticated, lookup
+def test_pending_state_precedes_validation_and_tool_executes_once(
+    authenticated, lookup
 ):
     lookup, executions = lookup
     seen_pending = []
-
-    def evaluate(state):
-        assert seen_pending and executions == []
-        return jev_evaluation(fields=["product"])
-
-    monkeypatch.setattr(judge, "evaluate", evaluate)
     agent = make_agent(
         [turn(call()), AIMessage(content="Produto localizado.")], [lookup]
     )
@@ -103,143 +96,92 @@ def test_pending_state_precedes_judgment_and_tool_executes_once(
                 c["status"] == "PENDING_JEV" for c in data.get("jev_calls", {}).values()
             ):
                 seen_pending.append(data)
+    assert seen_pending and executions == ["arroz"]
+
+
+def test_valid_read_runs_with_local_validation_only(authenticated, lookup):
+    lookup, executions = lookup
+    result = invoke(make_agent([turn(call()), AIMessage(content="ok")], [lookup]))
+    record = next(iter(result["jev_calls"].values()))
+    assert executions == ["arroz"]
+    assert record["status"] == "EXECUTED" and record["validacao_local"] is True
+
+
+def test_gate_does_not_depend_on_the_jev_key(monkeypatch, authenticated, lookup):
+    from pydantic import SecretStr
+
+    monkeypatch.setattr(judge, "TYPESAFE_API_KEY", SecretStr(""))
+    lookup, executions = lookup
+    invoke(make_agent([turn(call()), AIMessage(content="ok")], [lookup]))
     assert executions == ["arroz"]
 
 
-def test_rejection_repairs_and_rejudges_before_execution(
-    monkeypatch, authenticated, lookup
+@pytest.mark.parametrize("args", [{}, {"product": "arroz", "undeclared": True}])
+def test_invalid_schema_is_repaired_up_to_the_limit_and_never_executes(
+    authenticated, lookup, args
 ):
     lookup, executions = lookup
-    calls = []
-
-    def evaluate(state):
-        calls.append(state)
-        return (
-            jev_evaluation(
-                failed={"arguments_grounded": 0.1},
-                route="agent_repair",
-                fields=["product"],
-            )
-            if len(calls) == 1
-            else jev_evaluation(fields=["product"])
-        )
-
-    monkeypatch.setattr(judge, "evaluate", evaluate)
-    agent = make_agent(
-        [
-            turn(call(args={"product": "inventado"})),
-            turn(call(identifier="corrected")),
-            AIMessage(content="ok"),
-        ],
-        [lookup],
-    )
-    result = invoke(agent)
-    assert executions == ["arroz"] and len(calls) == 2
-    assert [c["status"] for c in result["jev_calls"].values()] == [
-        "RETRY_SPECIALIST",
-        "EXECUTED",
-    ]
-    assert [c["attempt"] for c in result["jev_calls"].values()] == [1, 2]
-
-
-def test_three_rejections_never_execute(monkeypatch, authenticated, lookup):
-    lookup, executions = lookup
-    monkeypatch.setattr(
-        judge,
-        "evaluate",
-        lambda state: jev_evaluation(
-            failed={"tool_appropriateness": 0.1},
-            route="agent_repair",
-            fields=["product"],
-        ),
-    )
-    result = invoke(
-        make_agent([turn(call(identifier=str(i))) for i in range(3)], [lookup])
-    )
-    assert executions == []
-    assert len(result["jev_calls"]) == 3 and result["jev_halt"]
-    assert max(c["attempt"] for c in result["jev_calls"].values()) == 3
-
-
-def test_missing_user_fact_asks_without_repair_or_execution(
-    monkeypatch, authenticated, lookup
-):
-    lookup, executions = lookup
-    monkeypatch.setattr(
-        judge,
-        "evaluate",
-        lambda state: jev_evaluation(
-            failed={"missing_user_information": 0.99},
-            route="user_input",
-            missing="product",
-            fields=["product"],
-        ),
-    )
-    result = invoke(make_agent([turn(call())], [lookup]))
-    assert executions == [] and result["jev_halt"]
-    assert "JEV" not in result["messages"][-1].content
-    assert len(result["jev_calls"]) == 1
-
-
-def test_schema_veto_cannot_be_overridden_by_jev(monkeypatch, authenticated, lookup):
-    lookup, executions = lookup
-    approve(monkeypatch)
-    result = invoke(
-        make_agent([turn(call(args={}, identifier=str(i))) for i in range(3)], [lookup])
-    )
-    assert executions == []
-    assert all(
-        c["failed_checks"] == ["SCHEMA_INVALID"] for c in result["jev_calls"].values()
-    )
-
-
-def test_unavailable_jev_does_not_retry_specialist_or_execute(
-    monkeypatch, authenticated, lookup
-):
-    lookup, executions = lookup
-
-    def broken(state):
-        raise judge.JevUnavailable("Bearer private-server-secret")
-
-    monkeypatch.setattr(judge, "evaluate", broken)
-    result = invoke(make_agent([turn(call())], [lookup]))
-    assert executions == [] and len(result["jev_calls"]) == 1
-    assert "indisponível" in result["messages"][-1].content
-    assert "private-server-secret" not in str(result)
-
-
-def test_multiple_calls_each_require_approval(monkeypatch, authenticated, lookup):
-    lookup, executions = lookup
-
-    def evaluate(state):
-        if state["tool"]["arguments"]["product"] == "carne":
-            return jev_evaluation(failed={"intent_alignment": 0.1}, fields=["product"])
-        return jev_evaluation(fields=["product"])
-
-    monkeypatch.setattr(judge, "evaluate", evaluate)
     result = invoke(
         make_agent(
-            [turn(call(), call(args={"product": "carne"}, identifier="second"))],
+            [
+                turn(call(args=args, identifier=str(i)))
+                for i in range(judge.MAX_ATTEMPTS)
+            ],
             [lookup],
         )
     )
-    assert executions == ["arroz"] and len(result["jev_calls"]) == 2
+    assert executions == []
+    assert all(
+        record["failed_checks"] == ["SCHEMA_INVALID"]
+        for record in result["jev_calls"].values()
+    )
+    assert list(result["jev_calls"].values())[-1]["decision"] == "REJECT"
+    assert result["jev_halt"]
 
 
-def test_unknown_tool_is_rejected_before_evaluation(monkeypatch, authenticated, lookup):
+def test_secret_in_arguments_is_blocked(authenticated, lookup):
     lookup, executions = lookup
-    seen = approve(monkeypatch)
+    result = invoke(
+        make_agent(
+            [turn(call(args={"product": tool_gate_token()}))],
+            [lookup],
+        )
+    )
+    assert executions == []
+    record = next(iter(result["jev_calls"].values()))
+    assert record["failed_checks"] == ["SECRET_IN_ARGUMENTS"]
+
+
+def tool_gate_token():
+    from iai.app.core.assistant import tool_gate
+
+    return tool_gate.context().token.get_secret_value()
+
+
+def test_multiple_valid_calls_all_execute(authenticated, lookup):
+    lookup, executions = lookup
+    result = invoke(
+        make_agent(
+            [
+                turn(call(), call(args={"product": "carne"}, identifier="second")),
+                AIMessage(content="ok"),
+            ],
+            [lookup],
+        )
+    )
+    assert sorted(executions) == ["arroz", "carne"] and len(result["jev_calls"]) == 2
+
+
+def test_unknown_tool_is_rejected(authenticated, lookup):
+    lookup, executions = lookup
     result = invoke(make_agent([turn(call(name="tool_nao_ligada"))], [lookup]))
-    assert executions == [] and seen == []
+    assert executions == []
     assert next(iter(result["jev_calls"].values()))["failed_checks"] == [
         "TOOL_NOT_ALLOWED"
     ]
 
 
-def test_judged_action_request_is_validated_but_never_executed(
-    monkeypatch, authenticated
-):
-    approve(monkeypatch)
+def test_proposal_only_registers_pending_and_never_executes(authenticated):
     proposal = PROPOSAL_TOOLS[Operation.CONSUME]
     result = invoke(
         make_agent(
@@ -262,14 +204,14 @@ def test_judged_action_request_is_validated_but_never_executed(
     )
     assert next(iter(result["jev_calls"].values()))["status"] == "EXECUTED"
     assert get_db().execution_mock.count_documents({}) == 0
+    assert get_db().approvals.count_documents({"status": "AGUARDANDO_APROVACAO"}) == 1
 
 
-def test_role_veto_does_not_call_jev(monkeypatch, authenticated):
+def test_role_veto_blocks_the_proposal():
     marker = current_context.set(replace(context_for("demo-comprador"), turn_id="role"))
-    seen = approve(monkeypatch)
     proposal = PROPOSAL_TOOLS[Operation.CONSUME]
     try:
-        invoke(
+        result = invoke(
             make_agent(
                 [
                     turn(
@@ -288,7 +230,11 @@ def test_role_veto_does_not_call_jev(monkeypatch, authenticated):
         )
     finally:
         current_context.reset(marker)
-    assert seen == [] and get_db().execution_mock.count_documents({}) == 0
+    assert get_db().execution_mock.count_documents({}) == 0
+    assert get_db().approvals.count_documents({}) == 0
+    assert next(iter(result["jev_calls"].values()))["failed_checks"] == [
+        "ROLE_NOT_ALLOWED"
+    ]
 
 
 @pytest.mark.parametrize(
@@ -298,17 +244,11 @@ def test_role_veto_does_not_call_jev(monkeypatch, authenticated):
         (buscar_historico, {"busca": "arroz"}),
     ],
 )
-def test_faq_and_history_also_pass_through_gate(
-    monkeypatch, authenticated, target, args
-):
-    seen = approve(monkeypatch)
+def test_faq_and_history_also_pass_through_gate(authenticated, target, args):
     result = invoke(
         make_agent([turn(call(target.name, args)), AIMessage(content="ok")], [target])
     )
-    assert (
-        len(seen) == 1
-        and next(iter(result["jev_calls"].values()))["status"] == "EXECUTED"
-    )
+    assert next(iter(result["jev_calls"].values()))["status"] == "EXECUTED"
 
 
 def test_direct_tool_call_is_not_a_live_bypass(authenticated, lookup):
@@ -318,25 +258,18 @@ def test_direct_tool_call_is_not_a_live_bypass(authenticated, lookup):
     assert executions == []
 
 
-def test_credentials_and_pii_are_not_sent_to_jev(monkeypatch, authenticated, lookup):
+def test_credentials_and_pii_are_not_kept_in_the_gate_records(authenticated, lookup):
     lookup, _ = lookup
-    seen = approve(monkeypatch)
     result = invoke(
         make_agent([turn(call()), AIMessage(content="ok")], [lookup]),
         "Consulte arroz. Bearer TOPSECRET email pessoa@example.com senha=private",
     )
-    assert (
-        seen and "TOPSECRET" not in str(seen) and "pessoa@example.com" not in str(seen)
-    )
-    assert "demo-estoquista" not in str(seen)
     assert "TOPSECRET" not in str(result["jev_calls"])
+    assert "pessoa@example.com" not in str(result["jev_calls"])
 
 
-def test_single_use_permission_blocks_executor_retry(
-    monkeypatch, authenticated, lookup
-):
+def test_single_use_permission_blocks_executor_retry(authenticated, lookup):
     lookup, executions = lookup
-    approve(monkeypatch)
 
     class RepeatingExecutor(JevToolGate):
         def wrap_tool_call(self, request, handler):
@@ -356,9 +289,8 @@ def test_single_use_permission_blocks_executor_retry(
     assert next(iter(result["jev_calls"].values()))["status"] == "FAILED"
 
 
-def test_arguments_cannot_change_after_approval(monkeypatch, authenticated, lookup):
+def test_arguments_cannot_change_after_validation(authenticated, lookup):
     lookup, executions = lookup
-    approve(monkeypatch)
 
     class TamperingExecutor(JevToolGate):
         def wrap_tool_call(self, request, handler):
@@ -411,33 +343,13 @@ def test_all_live_agents_have_the_gate():
         )
 
 
-def test_known_opaque_keys_are_removed_before_evaluation(
-    monkeypatch, authenticated, lookup
-):
-    from pydantic import SecretStr
-
-    from iai.app.core.assistant import tool_gate
-
-    lookup, _ = lookup
-    monkeypatch.setattr(
-        tool_gate, "TYPESAFE_API_KEY", SecretStr("private-typesafe-key")
-    )
-    seen = approve(monkeypatch)
-    invoke(
-        make_agent([turn(call()), AIMessage(content="ok")], [lookup]),
-        "Consulte arroz; private-typesafe-key",
-    )
-    assert seen and "private-typesafe-key" not in str(seen)
-
-
-def test_tool_reported_error_is_not_a_successful_execution(monkeypatch, authenticated):
+def test_tool_reported_error_is_not_a_successful_execution(authenticated):
     @tool
     def unavailable_lookup(product: str) -> str:
         """Consulta o produto; neste teste o serviço de negócio está indisponível."""
         return '{"ok":false,"code":"SERVICO_INDISPONIVEL"}'
 
     protect_tool(unavailable_lookup)
-    approve(monkeypatch)
     agent = make_agent(
         [turn(call("unavailable_lookup")), AIMessage(content="Serviço indisponível")],
         [unavailable_lookup],
@@ -445,206 +357,3 @@ def test_tool_reported_error_is_not_a_successful_execution(monkeypatch, authenti
     result = invoke(agent)
     record = next(iter(result["jev_calls"].values()))
     assert record["decision"] == "APPROVE" and record["status"] == "FAILED"
-
-
-# ---- Escopo todas: leituras e propostas exigem JEV individual ----
-
-
-def test_leitura_continua_consultando_o_juiz_individualmente(
-    monkeypatch, authenticated, lookup
-):
-    lookup, executions = lookup
-
-    seen = approve(monkeypatch)
-    result = invoke(make_agent([turn(call()), AIMessage(content="ok")], [lookup]))
-
-    registro = next(iter(result["jev_calls"].values()))
-    assert executions == ["arroz"] and registro["status"] == "EXECUTED"
-    assert len(seen) == 1 and "jev_dispensado" not in registro
-
-
-def test_leitura_sem_chave_do_jev_permanece_bloqueada(
-    monkeypatch, authenticated, lookup
-):
-    from pydantic import SecretStr
-
-    monkeypatch.setattr(judge, "TYPESAFE_API_KEY", SecretStr(""))
-    lookup, executions = lookup
-
-    invoke(make_agent([turn(call()), AIMessage(content="ok")], [lookup]))
-
-    assert executions == []
-
-
-def test_leitura_com_argumento_invalido_continua_barrada(
-    monkeypatch, authenticated, lookup
-):
-    lookup, executions = lookup
-    approve(monkeypatch)
-
-    result = invoke(
-        make_agent([turn(call(args={}, identifier=str(i))) for i in range(3)], [lookup])
-    )
-
-    assert executions == []
-    assert all(
-        c["failed_checks"] == ["SCHEMA_INVALID"] for c in result["jev_calls"].values()
-    )
-
-
-@pytest.mark.parametrize("scope", ["escrita", "todas"])
-def test_proposta_sempre_passa_pelo_juiz(monkeypatch, authenticated, scope):
-    monkeypatch.setattr(tool_gate, "JEV_ESCOPO", scope)
-    seen = approve(monkeypatch)
-    proposal = PROPOSAL_TOOLS[Operation.CONSUME]
-
-    invoke(
-        make_agent(
-            [
-                turn(
-                    call(
-                        proposal.name,
-                        {"batchId": 1, "quantity": "10", "justification": "Consumo"},
-                    )
-                ),
-                AIMessage(content="aguarda"),
-            ],
-            [proposal],
-        ),
-        "Usei 10 kg de arroz",
-    )
-
-    assert len(seen) == 1
-
-
-@pytest.mark.parametrize("scope", ["escrita", "todas"])
-def test_proposta_sem_chave_do_jev_continua_bloqueada(
-    monkeypatch, authenticated, scope
-):
-    from pydantic import SecretStr
-
-    monkeypatch.setattr(tool_gate, "JEV_ESCOPO", scope)
-    monkeypatch.setattr(judge, "TYPESAFE_API_KEY", SecretStr(""))
-    proposal = PROPOSAL_TOOLS[Operation.CONSUME]
-
-    invoke(
-        make_agent(
-            [
-                turn(
-                    call(
-                        proposal.name,
-                        {"batchId": 1, "quantity": "10", "justification": "Consumo"},
-                    )
-                )
-            ],
-            [proposal],
-        ),
-        "Usei 10 kg de arroz",
-    )
-
-    assert get_db().execution_mock.count_documents({}) == 0
-
-
-def test_recusa_do_juiz_aparece_no_log_com_o_motivo(
-    monkeypatch, authenticated, lookup, caplog
-):
-    import logging
-
-    lookup, _ = lookup
-    monkeypatch.setattr(
-        judge,
-        "evaluate",
-        lambda state: jev_evaluation(
-            failed={"tool_necessity": 0.1},
-            route="reject",
-            fields=state["tool"]["schema"].get("properties", {}),
-        ),
-    )
-
-    with caplog.at_level(logging.INFO, logger=tool_gate.logger.name):
-        invoke(make_agent([turn(call())], [lookup]))
-
-    assert "jev_rejected" in caplog.text and "tool_necessity" in caplog.text
-    assert "arroz" not in caplog.text
-
-
-def test_recusa_explica_o_motivo_em_vez_de_mensagem_generica(
-    monkeypatch, authenticated, lookup
-):
-    lookup, executions = lookup
-    monkeypatch.setattr(
-        judge,
-        "evaluate",
-        lambda state: jev_evaluation(
-            failed={"arguments_grounded": 0.1},
-            route="reject",
-            fields=state["tool"]["schema"].get("properties", {}),
-        ),
-    )
-
-    result = invoke(make_agent([turn(call())], [lookup]))
-
-    assert executions == []
-    assert "nome completo" in result["messages"][-1].content
-    assert "Essa etapa não foi realizada" in result["messages"][-1].content
-
-
-# ---- Escopo escrita: leituras mantêm o gate local, sem avaliar no JEV ----
-
-
-def test_write_scope_read_executes_without_judge(monkeypatch, authenticated, lookup):
-    monkeypatch.setattr(tool_gate, "JEV_ESCOPO", "escrita")
-
-    def unexpected_evaluation(state):
-        pytest.fail("Leitura no escopo escrita não deve chamar o JEV")
-
-    monkeypatch.setattr(judge, "evaluate", unexpected_evaluation)
-    lookup, executions = lookup
-    result = invoke(make_agent([turn(call()), AIMessage(content="ok")], [lookup]))
-    record = next(iter(result["jev_calls"].values()))
-    assert executions == ["arroz"]
-    assert record["status"] == "EXECUTED"
-    assert record["jev_dispensado"] == "leitura"
-
-
-@pytest.mark.parametrize("args", [{}, {"product": "arroz", "undeclared": True}])
-def test_write_scope_read_rejects_invalid_schema(
-    monkeypatch, authenticated, lookup, args
-):
-    monkeypatch.setattr(tool_gate, "JEV_ESCOPO", "escrita")
-    seen = approve(monkeypatch)
-    lookup, executions = lookup
-    result = invoke(
-        make_agent(
-            [
-                turn(call(args=args, identifier=str(i)))
-                for i in range(judge.MAX_ATTEMPTS)
-            ],
-            [lookup],
-        )
-    )
-    assert executions == [] and seen == []
-    assert all(
-        record["failed_checks"] == ["SCHEMA_INVALID"]
-        for record in result["jev_calls"].values()
-    )
-    assert list(result["jev_calls"].values())[-1]["decision"] == "REJECT"
-
-
-def test_write_scope_read_still_blocks_secrets(monkeypatch, authenticated, lookup):
-    monkeypatch.setattr(tool_gate, "JEV_ESCOPO", "escrita")
-    seen = approve(monkeypatch)
-    lookup, executions = lookup
-    result = invoke(
-        make_agent(
-            [
-                turn(
-                    call(args={"product": tool_gate.context().token.get_secret_value()})
-                )
-            ],
-            [lookup],
-        )
-    )
-    assert executions == [] and seen == []
-    record = next(iter(result["jev_calls"].values()))
-    assert record["failed_checks"] == ["SECRET_IN_ARGUMENTS"]

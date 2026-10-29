@@ -46,6 +46,7 @@ from iai.app.core.assistant.respostas import (
     resposta_de_propostas,
     resumo_para_log,
 )
+from iai.app.core.assistant.revisao import CODIGO_CANCELADA, revisar, revisar_faq
 from iai.app.core.assistant.tool_gate import GateState, JevToolGate, live_tool_scope
 from iai.app.core.config import BUSINESS_MODE, LLM_MODE
 from iai.app.core.infra.metrics import ColetorMetricas, registrar_requisicao
@@ -232,6 +233,7 @@ faq_app = _faq_graph.compile()
 
 def responder_faq(estado: Estado, config: RunnableConfig) -> dict:
     result = faq_app.invoke({"messages": list(estado["messages"])}, config=config)
+    result = revisar_faq(result, config)
     updates = gate_updates(estado, result, "faq")
     markers = ["faq"]
     if not result.get("jev_halt") and any(
@@ -510,6 +512,19 @@ grafo.add_node("guardrail_escopo", no_guardrail_escopo)  # type: ignore[call-ove
 grafo.add_node("roteador", no_roteador)  # type: ignore[call-overload,arg-type]
 
 
+FERRAMENTAS_DO_AGENTE = {
+    nome: {
+        tool.name: tool
+        for tool in [*tools, *TOOLS_MEMORIA, *TOOLS_DOCUMENTOS, faq_retriever]
+    }
+    for nome, tools in (
+        ("estoquista", STOCK_TOOLS),
+        ("comprador", BUY_TOOLS),
+        ("supervisor", SUPERVISOR_TOOLS),
+    )
+}
+
+
 def especialista_node(nome):
     def invoke(estado, config):
         agente = {
@@ -518,7 +533,12 @@ def especialista_node(nome):
             "supervisor": supervisor_app,
             "faq": faq_app,
         }[nome]
-        resposta = agente.invoke({"messages": list(estado["messages"])}, config=config)
+        entrada = list(estado["messages"])
+        resposta = agente.invoke({"messages": entrada}, config=config)
+        # O JEV julga depois do especialista e antes do usuário (revisao.py).
+        resposta = revisar(
+            nome, agente, entrada, resposta, config, FERRAMENTAS_DO_AGENTE[nome]
+        )
         final = next(
             (
                 extrair_texto(m)
@@ -678,7 +698,8 @@ def executar_fluxo_chat(
                     elif (
                         isinstance(data, dict)
                         and data.get("ok") is False
-                        and data.get("code") not in {"JEV_REJECTED", "TOOL_FAILED"}
+                        and data.get("code")
+                        not in {"JEV_REJECTED", "TOOL_FAILED", CODIGO_CANCELADA}
                     ):
                         tool_failures.append(
                             f"{data.get('code', 'ERRO')}: {data.get('message', 'Etapa não confirmada.')}"

@@ -69,3 +69,17 @@ def jev_evaluation(*, failed=None, route="none", missing="not_identified", field
         answers=answers,
         usage={"input_tokens": 10, "output_tokens": 2},
     )
+
+
+def jev_fidelidade(*, failed=None):
+    """Resposta TypeSafe roteirizada para o juiz de texto (4 critérios, todos aprovados por padrão)."""
+    from iai.app.core.assistant import judge
+
+    answers = {key: {"type": "noul", "noul": 0.99} for key in judge.FIDELIDADE}
+    for key, probability in (failed or {}).items():
+        answers[key]["noul"] = probability
+    return judge.Evaluation(
+        model="jev-1.13.0",
+        answers=answers,
+        usage={"input_tokens": 10, "output_tokens": 2},
+    )

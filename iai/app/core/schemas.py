@@ -159,6 +159,16 @@ class Custo(BaseModel):
     por_modelo: list[CustoModelo]
 
 
+class Jev(BaseModel):
+    chamadas: int
+    reprovacoes: int
+    indisponiveis: int
+    latencia_media_ms: int
+    latencia_p95_ms: int
+    tokens_entrada: int
+    custo_usd: float
+
+
 class Resolucao(BaseModel):
     resolucoes: int
     taxa_resolucao: float
@@ -191,6 +201,7 @@ class MetricasResponse(BaseModel):
     latencia: Latencia
     erros: Erros
     custo: Custo
+    jev: Jev
     resolucao: Resolucao
     roi: Roi
     cenarios: list[Cenario]

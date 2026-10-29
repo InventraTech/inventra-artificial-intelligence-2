@@ -14,6 +14,7 @@ from iai.app.core.config import (
     CENARIOS_USUARIOS_SEMANAIS,
     LLM_MODE,
     PERIODOS,
+    PRECO_JEV_USD_POR_MILHAO,
     PRECOS_MODELOS_USD_POR_MILHAO,
     REQUISICOES_POR_USUARIO_SEMANA,
     VALOR_POR_RESOLUCAO_USD,
@@ -24,6 +25,7 @@ from iai.app.core.schemas import (
     Custo,
     CustoModelo,
     Erros,
+    Jev,
     Latencia,
     LatenciaNo,
     MetricasResponse,
@@ -41,6 +43,13 @@ PREFIXOS_GUARDRAIL_ENTRADA = ("guardrail_insulto:", "guardrail_escopo:")
 def custo_usd(modelo: str, entrada: int, saida: int) -> float:
     preco_entrada, preco_saida = PRECOS_MODELOS_USD_POR_MILHAO.get(modelo, (0.0, 0.0))
     return (entrada * preco_entrada + saida * preco_saida) / 1_000_000
+
+
+def custo_jev_usd(chamada: dict[str, Any]) -> float:
+    """Custo de uma chamada ao JEV; sem tokens informados, não há como estimar (0)."""
+    uso = chamada.get("usage") or {}
+    preco_entrada, preco_saida = PRECO_JEV_USD_POR_MILHAO
+    return (uso.get("input_tokens", 0) * preco_entrada + uso.get("output_tokens", 0) * preco_saida) / 1_000_000
 
 
 class ColetorMetricas(BaseCallbackHandler):
@@ -151,6 +160,7 @@ def registrar_requisicao(
     conteúdo da conversa nem o motivo do juiz."""
     agentes = (estado_final or {}).get("agentes_chamados") or coletor.agentes_chamados
     status = status_da_requisicao(agentes, falhou)
+    chamadas_jev = list((estado_final or {}).get("jev_calls", {}).values())
     try:
         col_metricas.insert_one({
             "timestamp":         datetime.now(UTC),
@@ -161,11 +171,15 @@ def registrar_requisicao(
             "status":            status,
             "nos":               coletor.nos,
             "chamadas":          coletor.chamadas,
-            "tokens_entrada":    sum(c["tokens_entrada"] for c in coletor.chamadas),
-            "tokens_saida":      sum(c["tokens_saida"] for c in coletor.chamadas),
-            "custo_usd":         sum(c["custo_usd"] for c in coletor.chamadas),
+            "tokens_entrada":    sum(c["tokens_entrada"] for c in coletor.chamadas)
+                                 + sum((c.get("usage") or {}).get("input_tokens", 0) for c in chamadas_jev),
+            "tokens_saida":      sum(c["tokens_saida"] for c in coletor.chamadas)
+                                 + sum((c.get("usage") or {}).get("output_tokens", 0) for c in chamadas_jev),
+            # Custo do turno = LLMs + JEV (o JEV também custa dinheiro e latência).
+            "custo_usd":         sum(c["custo_usd"] for c in coletor.chamadas)
+                                 + sum(custo_jev_usd(c) for c in chamadas_jev),
             "erros_componentes": coletor.erros + [
-                "jev:" + call["error_type"] for call in (estado_final or {}).get("jev_calls", {}).values()
+                "jev:" + call["error_type"] for call in chamadas_jev
                 if call.get("error_type")
             ],
             "resolvida":         status == "ok" and foi_resolvida(agentes),
@@ -175,7 +189,7 @@ def registrar_requisicao(
                 "id", "agent", "tool", "attempt", "status", "decision", "checks",
                 "failed_checks", "duration_ms", "model", "usage", "error_type",
                 "created_at", "decided_at", "finished_at",
-            ) if key in call} for call in (estado_final or {}).get("jev_calls", {}).values()],
+            ) if key in call} | {"custo_usd": custo_jev_usd(call)} for call in chamadas_jev],
             "jev_events": (estado_final or {}).get("jev_events", []),
             "error_type":        error_type,
         })
@@ -229,6 +243,12 @@ def gerar_metricas(
         for c in t["chamadas"]:
             por_modelo[c["modelo"]].append(c)
 
+    chamadas_jev = [c for t in turnos for c in t.get("jev", [])]
+    duracoes_jev = [c["duration_ms"] for c in chamadas_jev if "duration_ms" in c]
+    jev_por_modelo: dict[str, list[dict]] = defaultdict(list)
+    for c in chamadas_jev:
+        jev_por_modelo[c.get("model", "jev")].append(c)
+
     custo_total = sum(t["custo_usd"] for t in turnos)
     custo_medio = custo_total / total if total else 0.0
     resolucoes = sum(1 for t in turnos if t["resolvida"])
@@ -279,7 +299,25 @@ def gerar_metricas(
                     custo_usd=round(sum(i["custo_usd"] for i in itens), 6),
                 )
                 for modelo, itens in sorted(por_modelo.items())
+            ] + [
+                CustoModelo(
+                    modelo=modelo,
+                    chamadas=len(itens),
+                    tokens_entrada=sum((i.get("usage") or {}).get("input_tokens", 0) for i in itens),
+                    tokens_saida=sum((i.get("usage") or {}).get("output_tokens", 0) for i in itens),
+                    custo_usd=round(sum(i.get("custo_usd", 0.0) for i in itens), 6),
+                )
+                for modelo, itens in sorted(jev_por_modelo.items())
             ],
+        ),
+        jev=Jev(
+            chamadas=len(chamadas_jev),
+            reprovacoes=sum(1 for c in chamadas_jev if c.get("decision") == "REJECT"),
+            indisponiveis=sum(1 for c in chamadas_jev if c.get("error_type")),
+            latencia_media_ms=round(_media(duracoes_jev)),
+            latencia_p95_ms=round(percentil_95(duracoes_jev)),
+            tokens_entrada=sum((c.get("usage") or {}).get("input_tokens", 0) for c in chamadas_jev),
+            custo_usd=round(sum(c.get("custo_usd", 0.0) for c in chamadas_jev), 6),
         ),
         resolucao=Resolucao(
             resolucoes=resolucoes,
