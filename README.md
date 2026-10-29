@@ -166,7 +166,8 @@ O token fica só no contexto da requisição (não entra em prompt, histórico o
 
 | Tool (agente) | Endpoints consumidos |
 |---|---|
-| `consultar_inventra` (todos) | `GET /api/products`, `/api/suppliers`, `/api/stock-batches` (+ `/expiring-soon`, `/low-stock`), `/api/products/{id}/kitchen-parameters`, `/api/products/{id}/suppliers`, `/api/requisitions` (+ `/{id}/items`), `/api/inventories` (+ `/{id}/counts`), `/api/alerts`, `/api/categories`, `/api/units`, `/api/kitchens` |
+| `consultar_inventra` (todos) | `GET /api/products`, `/api/suppliers`, `/api/stock-batches` (+ `/expiring-soon`, `/low-stock`), `/api/products/{id}/kitchen-parameters`, `/api/products/{id}/suppliers`, `/api/requisitions` (+ `/{id}/items`), `/api/inventories` (+ `/{id}/counts`), `/api/alerts`, `/api/categories`, `/api/units`, `/api/kitchens`; `consumo` (produtos que mais saem) é estimado dos mesmos lotes: quantidade inicial − atual |
+| `planejar_baixa` (estoquista, supervisor) | leitura: acha o produto pelo nome em `/api/stock-batches` e monta o plano de baixa por validade (vence primeiro, sai primeiro); não altera dados, a baixa continua sendo uma proposta aprovada pelo solicitante |
 | `propor_*` (estoquista, comprador, supervisor) | só criam proposta no Mongo da IAI; depois da aprovação, a execução chama `POST/PUT/PATCH` em `/api/products`, `/api/suppliers`, `/api/stock-batches` (`restock`, `consume`, `adjust`), `/api/requisitions` (`items`, `cancel`) e `/api/inventories` (`counts`) |
 
 **Erros:** a integração nunca derruba o agente. API fora do ar, timeout, status inesperado ou

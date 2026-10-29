@@ -23,6 +23,26 @@ Name = Annotated[str, Field(min_length=1, max_length=150)]
 class StrictModel(BaseModel):
     model_config = ConfigDict(extra="forbid", str_strip_whitespace=True)
 
+    @model_validator(mode="before")
+    @classmethod
+    def descarta_valores_vazios(cls, data):
+        """Modelos preenchem campos opcionais com null, "" ou 0 (em IDs): isso é "ausente".
+
+        Só descarta o que não pode ser um valor real: null, texto vazio e 0 em campo de
+        identificador (sempre > 0). Quantidades 0 continuam valendo (ex.: ajustar para 0).
+        """
+        if not isinstance(data, dict):
+            return data
+        limpo = {}
+        for chave, valor in data.items():
+            if valor is None or (isinstance(valor, str) and not valor.strip()):
+                continue
+            eh_id = chave.endswith(("Id", "_id"))
+            if eh_id and not isinstance(valor, bool) and valor in (0, "0"):
+                continue
+            limpo[chave] = valor
+        return limpo
+
 
 class CreateProduct(StrictModel):
     name: Name
@@ -270,6 +290,7 @@ class Query(StrictModel):
         "categorias",
         "unidades",
         "cozinha",
+        "consumo",
     ]
     product_id: PositiveId | None = None
     record_id: PositiveId | None = None

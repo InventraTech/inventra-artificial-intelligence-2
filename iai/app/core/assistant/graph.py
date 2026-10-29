@@ -18,6 +18,7 @@ from langchain_core.runnables import RunnableConfig
 from langgraph.graph import END, StateGraph
 from langgraph.prebuilt import ToolNode
 
+from iai.app.core.assistant.continuidade import SemPromessaVazia
 from iai.app.core.assistant.guardrail import (
     anonimizar_entrada,
     guardrail_escopo,
@@ -56,6 +57,14 @@ from iai.app.core.tools.memoria import TOOLS_MEMORIA
 from iai.app.core.tools.operational import BUY_TOOLS, STOCK_TOOLS, SUPERVISOR_TOOLS
 
 logger = logging.getLogger(__name__)
+
+
+ROTA_PARALELA = "estoquista,comprador"
+ORDEM_E_ROTULO = {
+    "estoquista": "Estoque",
+    "comprador": "Compras",
+    "supervisor": "Visão geral",
+}
 
 
 def extrair_texto(mensagem: BaseMessage) -> str:
@@ -106,6 +115,7 @@ estoquista_app = create_agent(  # type: ignore[call-overload]
             "estoquista",
             STOCK_TOOLS + TOOLS_MEMORIA + TOOLS_DOCUMENTOS + [faq_retriever],
         ),
+        SemPromessaVazia(),
         _prompt_com_data(ESTOQUISTA_SYSTEM_PROMPT),
     ],
 )
@@ -117,6 +127,7 @@ comprador_app = create_agent(  # type: ignore[call-overload]
         JevToolGate(
             "comprador", BUY_TOOLS + TOOLS_MEMORIA + TOOLS_DOCUMENTOS + [faq_retriever]
         ),
+        SemPromessaVazia(),
         _prompt_com_data(COMPRADOR_SYSTEM_PROMPT),
     ],
 )
@@ -129,6 +140,7 @@ supervisor_app = create_agent(  # type: ignore[call-overload]
             "supervisor",
             SUPERVISOR_TOOLS + TOOLS_MEMORIA + TOOLS_DOCUMENTOS + [faq_retriever],
         ),
+        SemPromessaVazia(),
         _prompt_com_data(SUPERVISOR_SYSTEM_PROMPT),
     ],
 )
@@ -330,8 +342,10 @@ def no_roteador(estado: Estado, config: RunnableConfig) -> dict:
     from iai.app.core.assistant.artifacts import (
         KITCHEN_MESSAGE,
         SALES_MESSAGE,
+        looks_like_action,
         unsupported_kitchens,
         unsupported_sales,
+        visual_requested,
     )
 
     if unsupported_sales(extrair_texto(estado["messages"][-1])):
@@ -343,6 +357,16 @@ def no_roteador(estado: Estado, config: RunnableConfig) -> dict:
         return {
             "rota": "fim",
             "messages": [{"role": "assistant", "content": KITCHEN_MESSAGE}],
+        }
+    pergunta = extrair_texto(estado["messages"][-1])
+    if visual_requested(pergunta) and not looks_like_action(pergunta):
+        # Gráfico/tabela pedidos de forma explícita: o backend lê os dados confirmados e
+        # desenha (executar_fluxo_chat -> present). Não depende de o modelo aceitar o
+        # pedido nem de ele lembrar de consultar antes.
+        return {
+            "rota": "fim",
+            "agentes_chamados": ["roteador:visual"],
+            "messages": [{"role": "assistant", "content": ""}],
         }
     saida = router_app.invoke({"messages": list(estado["messages"])}, config=config)
 
@@ -395,7 +419,15 @@ def no_roteador(estado: Estado, config: RunnableConfig) -> dict:
             rota = linha.split("=", 1)[1].strip().lower()
             break
 
-    if rota not in {"estoquista", "comprador", "supervisor", "faq"}:
+    partes = {p.strip() for p in rota.split(",") if p.strip()}
+    if len(partes) > 1:
+        # Dois especialistas em paralelo só para LEITURA de estoque + compras. Qualquer
+        # outra combinação (FAQ, alterações) fica com o supervisor, que tem todas as tools.
+        paralelo = partes == {"estoquista", "comprador"} and not looks_like_action(
+            pergunta
+        )
+        rota = ROTA_PARALELA if paralelo else "supervisor"
+    if rota not in {"estoquista", "comprador", "supervisor", "faq", ROTA_PARALELA}:
         rota = "supervisor"
 
     return {
@@ -405,7 +437,29 @@ def no_roteador(estado: Estado, config: RunnableConfig) -> dict:
     }
 
 
+def juntar_respostas_paralelas(parciais: list[dict]) -> str:
+    """Uma seção por especialista, sem LLM: nenhum número é reescrito nem inventado."""
+    ordem = list(ORDEM_E_ROTULO)
+    secoes = [
+        f"**{ORDEM_E_ROTULO.get(p['agente'], p['agente'].capitalize())}**\n{p['texto'].strip()}"
+        for p in sorted(
+            parciais,
+            key=lambda p: ordem.index(p["agente"]) if p["agente"] in ordem else 99,
+        )
+        if p.get("texto", "").strip()
+    ]
+    return "\n\n".join(secoes)
+
+
 def no_orquestrador(estado: Estado) -> dict:
+    parciais = estado.get("respostas_parciais") or []
+    if len(parciais) >= 2:
+        return {
+            "agentes_chamados": [*estado["rota"].split(","), "orquestrador:paralelo"],
+            "messages": [
+                {"role": "assistant", "content": juntar_respostas_paralelas(parciais)}
+            ],
+        }
     if estado.get("jev_halt"):
         return {"messages": [{"role": "assistant", "content": estado["jev_halt"]}]}
     ultima_especialista = ""
@@ -430,7 +484,10 @@ def no_orquestrador(estado: Estado) -> dict:
     }
 
 
-def decidir_especialista(estado: Estado) -> str:
+def decidir_especialista(estado: Estado) -> str | list[str]:
+    if estado["rota"] == ROTA_PARALELA:
+        # Lista de destinos = fan-out: os dois nós rodam no mesmo passo do grafo.
+        return ["estoquista", "comprador"]
     return (
         estado["rota"]
         if estado["rota"] in ("estoquista", "comprador", "supervisor", "faq")
@@ -462,9 +519,18 @@ def especialista_node(nome):
             "faq": faq_app,
         }[nome]
         resposta = agente.invoke({"messages": list(estado["messages"])}, config=config)
+        final = next(
+            (
+                extrair_texto(m)
+                for m in reversed(resposta["messages"])
+                if m.type == "ai" and m.content
+            ),
+            "",
+        )
         return {
             **gate_updates(estado, resposta, nome),
             "messages": resposta["messages"],
+            "respostas_parciais": [{"agente": nome, "texto": final}],
         }
 
     return invoke
@@ -652,11 +718,16 @@ def executar_fluxo_chat(
                 demo=LLM_MODE == "demo",
                 jev_calls=output.get("jev_calls", {}) if LLM_MODE == "live" else None,
                 config={"callbacks": [coletor]},
+                fetch_missing=True,
             )
             if artifacts:
                 response = description
             elif description:
-                response += "\n" + description
+                response = (response + "\n" + description).strip()
+        if not response.strip():
+            response = (
+                "Não consegui montar essa resposta agora. Tente de novo em instantes."
+            )
         if tool_failures and not proposals:
             response += "\nFontes/etapas indisponíveis:\n" + "\n".join(
                 reversed(tool_failures)

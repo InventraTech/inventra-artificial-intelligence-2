@@ -40,10 +40,8 @@ def capabilities(ctx: Authenticated):
                     role for role, ops in ROLE_OPERATIONS.items() if operation in ops
                 ],
                 "parameters_schema": PARAMETERS[operation].model_json_schema(),
-                "spring_limitation": "Depende de endpoint de edição de contagem."
+                "spring_limitation": "A API não tem PUT de contagem: a IAI apaga e regrava a contagem e restaura a antiga se a nova falhar."
                 if operation == Operation.EDIT_COUNT
-                else "Depende de remoção lógica confirmada."
-                if operation == Operation.REMOVE_ITEM
                 else None,
             }
             for operation in Operation

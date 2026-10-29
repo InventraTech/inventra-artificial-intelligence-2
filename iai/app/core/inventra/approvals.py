@@ -351,19 +351,6 @@ def execute_approved(identifier, ctx):
             },
         )
         return public(col.find_one({"_id": identifier}))
-    if BUSINESS_MODE == "spring" and doc["action"]["operation"] in {
-        Operation.EDIT_COUNT,
-        Operation.REMOVE_ITEM,
-    }:
-        col.update_one(
-            {"_id": identifier, "status": doc["status"]},
-            {
-                "$set": {
-                    "execution_error": "INTEGRACAO_PENDENTE: edição de contagem ou remoção lógica de item não disponível."
-                }
-            },
-        )
-        return public(col.find_one({"_id": identifier}))
     action = Action.model_validate(doc["action"])
     # Os dados aprovados não mudam. Alvo alterado exige nova proposta/decisão.
     try:

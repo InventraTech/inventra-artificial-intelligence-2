@@ -37,8 +37,10 @@ async def expiration_worker():
 async def lifespan(app):
     try:
         await asyncio.to_thread(initialize_storage)
-    except PyMongoError:
-        pass
+    except PyMongoError as erro:
+        logging.getLogger(__name__).error(
+            "Não consegui conectar no Mongo ao subir (modo %s): %s", STORAGE_MODE, erro
+        )
     task = asyncio.create_task(expiration_worker())
     try:
         yield
@@ -81,10 +83,14 @@ async def modes(request, call_next):
 
 @app.exception_handler(PyMongoError)
 async def database_error(request, error):
+    logging.getLogger(__name__).error(
+        "Armazenamento indisponível (modo %s): %s", STORAGE_MODE, error
+    )
     return JSONResponse(
         status_code=503,
         content={
-            "detail": "Persistência indisponível. Resultado de escrita em andamento pode exigir reconciliação."
+            "detail": "O armazenamento da IA está indisponível agora. "
+            "Se você estava aprovando uma ação, confira o estoque antes de repetir."
         },
     )
 

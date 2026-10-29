@@ -16,6 +16,7 @@ class ArtifactBase(BaseModel):
     model_config = ConfigDict(extra="forbid")
     source: str
     mocked: bool
+    note: str | None = Field(default=None, max_length=300)
 
 
 class TableColumn(BaseModel):
@@ -196,13 +197,24 @@ class MetricasResponse(BaseModel):
     premissas: Premissas
 
 
+def unir_dicts(atual: dict | None, novo: dict | None) -> dict:
+    return {**(atual or {}), **(novo or {})}
+
+
+def primeiro_valor(atual: str | None, novo: str | None) -> str | None:
+    return atual or novo
+
+
 class Estado(MessagesState):
     agentes_chamados: Annotated[list[str], operator.add]
     rota: str
     mapa_pii: dict
-    jev_calls: dict
+    # Especialistas em paralelo escrevem no mesmo passo: cada campo precisa de um reducer.
+    jev_calls: Annotated[dict, unir_dicts]
     jev_events: Annotated[list[dict], operator.add]
-    jev_halt: str | None
+    jev_halt: Annotated[str | None, primeiro_valor]
+    # Resposta final de cada especialista da rodada (a síntese junta quando são vários).
+    respostas_parciais: Annotated[list[dict], operator.add]
 
 
 class ResultadoGuardrail(BaseModel):
