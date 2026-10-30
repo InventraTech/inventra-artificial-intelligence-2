@@ -121,12 +121,13 @@ if (
     or api_address.fragment
 ):
     raise ValueError("INVENTRA_API_URL inválida; não use credenciais na URL.")
-if api_address.scheme != "https" and api_address.hostname not in {
-    "localhost",
-    "127.0.0.1",
-    "::1",
-}:
-    raise ValueError("JWT exige HTTPS fora de localhost.")
+# Service do Kubernetes (ex.: inventra-api.inventra.svc.cluster.local): tráfego interno ao cluster.
+if (
+    api_address.scheme != "https"
+    and api_address.hostname not in {"localhost", "127.0.0.1", "::1"}
+    and not api_address.hostname.endswith(".svc.cluster.local")
+):
+    raise ValueError("JWT exige HTTPS fora de localhost e do cluster.")
 
 
 def business_date():

@@ -2,13 +2,18 @@ name: CD
 
 on:
   push:
-    branches: [main]
+    tags: ['v*']
+
+# O workflow compartilhado publica no GHCR (packages: write); um workflow
+# reutilizável não pode exceder as permissões concedidas pelo chamador.
+permissions:
+  contents: read
+  packages: write
 
 jobs:
   cd:
     uses: InventraTech/.github/.github/workflows/cd-python.yaml@main
     with:
       image-name: inventra-ai
-    secrets:
-      DOCKERHUB_USER: ${{ secrets.DOCKERHUB_USER }}
-      DOCKERHUB_TOKEN: ${{ secrets.DOCKERHUB_TOKEN }}
+      gitops-app: inventra-ai
+    secrets: inherit
