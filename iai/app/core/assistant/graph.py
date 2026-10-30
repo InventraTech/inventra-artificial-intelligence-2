@@ -3,7 +3,7 @@ import re
 from collections.abc import Iterator
 from threading import Event
 from time import perf_counter
-from typing import cast
+from typing import Any, cast
 from uuid import uuid4
 
 from langchain.agents import create_agent
@@ -732,7 +732,7 @@ def _estado_inicial(pergunta_usuario: str, session_id: str, user_id: str, k) -> 
     )
 
 
-def _config_fluxo(session_id: str, user_id: str, k, coletor) -> dict:
+def _config_fluxo(session_id: str, user_id: str, k, coletor) -> RunnableConfig:
     return {
         "configurable": {"thread_id": session_id, "user_id": user_id, "kitchen_id": k},
         "recursion_limit": 80,
@@ -845,12 +845,17 @@ def executar_fluxo_chat_stream(
         else:
             _exigir_provedores()
             with live_tool_scope():
-                for ns, modo, parte in fluxo_agentes.stream(
-                    estado_inicial,
-                    config=_config_fluxo(session_id, user_id, k, coletor),
-                    stream_mode=["tasks", "custom", "messages", "values"],
-                    subgraphs=True,
-                ):
+                # Com stream_mode em lista e subgraphs=True, cada item é (namespace, modo, dado).
+                partes = cast(
+                    Iterator[tuple[tuple, str, Any]],
+                    fluxo_agentes.stream(
+                        estado_inicial,
+                        config=_config_fluxo(session_id, user_id, k, coletor),
+                        stream_mode=["tasks", "custom", "messages", "values"],
+                        subgraphs=True,
+                    ),
+                )
+                for ns, modo, parte in partes:
                     if cancelado is not None and cancelado.is_set():
                         raise ClienteDesistiu
                     if modo == "values":
