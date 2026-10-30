@@ -58,6 +58,27 @@ use `IAI_STORAGE_MODE=mongo` e `MONGO_CONNECTION` apontando para um MongoDB.
    celular ou um túnel (`ngrok http 8000`). Não exponha `0.0.0.0` em rede pública no modo demo.
 
 Documentação interativa: `http://127.0.0.1:8000/docs`.
+
+### Streaming de resposta (`POST /chat/stream`)
+
+Mesmo corpo do `/chat`, resposta em NDJSON (`application/x-ndjson`, uma linha JSON por evento) que
+chega conforme a IA trabalha. O `/chat` continua igual. Quick Tunnel do Cloudflare não suporta SSE,
+por isso o formato é NDJSON.
+
+| `type` | Campos | Quando |
+|---|---|---|
+| `etapa` | `id`, `status` (`inicio`/`fim`), `texto` | nó do grafo ou tool começando/terminando |
+| `pensamento` | `id`, `delta` | resumo do raciocínio do Gemini, ao vivo (não conferido pelo juiz) |
+| `artefato` | `artifact` | gráfico/tabela pronto (mesmo JSON de `artifacts` do `/chat`) |
+| `cartao` | `approval_id`, `pending_action` | proposta aguardando aprovação (mesmo JSON de `pending_actions`) |
+| `texto` | `delta` | resposta final, **só depois** do JEV aprovar, em pedaços |
+| `fim` | `status` (`aprovado`/`segura`) | último evento |
+| `erro` | `mensagem` | falha depois do HTTP 200 |
+
+Linhas em branco são sinal de vida (a cada 8 s). Fechar a conexão para o grafo. O histórico guarda só
+o texto final aprovado. `IAI_PENSAMENTO=off` desliga o resumo do raciocínio (ele gasta tokens de saída).
+
+Teste rápido: `curl -N -X POST http://127.0.0.1:8000/chat/stream -H "Authorization: Bearer demo-estoquista" -H "Content-Type: application/json" -d '{"session_id":"s1","user_id":"demo-estoquista","pergunta":"Ola"}'`
 Estado/configuração: `GET /health`; modos também aparecem nos cabeçalhos `X-IAI-*`.
 
 ## Identidade demonstrativa

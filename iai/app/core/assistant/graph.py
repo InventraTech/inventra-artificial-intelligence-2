@@ -1,7 +1,9 @@
 import logging
 import re
+from collections.abc import Iterator
+from threading import Event
 from time import perf_counter
-from typing import cast
+from typing import Any, cast
 from uuid import uuid4
 
 from langchain.agents import create_agent
@@ -18,6 +20,7 @@ from langchain_core.runnables import RunnableConfig
 from langgraph.graph import END, StateGraph
 from langgraph.prebuilt import ToolNode
 
+from iai.app.core.assistant import eventos_do_fluxo
 from iai.app.core.assistant.continuidade import SemPromessaVazia
 from iai.app.core.assistant.guardrail import (
     anonimizar_entrada,
@@ -74,9 +77,12 @@ def extrair_texto(mensagem: BaseMessage) -> str:
     if isinstance(conteudo, str):
         return conteudo
     if isinstance(conteudo, list):
+        # Blocos de pensamento do modelo não fazem parte da resposta.
         return " ".join(
             item if isinstance(item, str) else str(item.get("text", ""))
             for item in conteudo
+            if isinstance(item, str)
+            or item.get("type") not in {"thinking", "reasoning"}
         )
     return str(conteudo)
 
@@ -613,18 +619,97 @@ def executar_fluxo_assessor(
     return executar_fluxo_chat(pergunta_usuario, session_id, user_id).resposta
 
 
-def executar_fluxo_chat(
-    pergunta_usuario: str, session_id: str, user_id: str = "user_test"
+def _montar_resposta(
+    output: dict, pergunta_usuario: str, session_id: str, user_id: str, k, coletor
 ) -> ChatResponse:
+    """Transforma a saída do grafo na resposta final e grava só o texto aprovado no histórico."""
     import json
 
-    from fastapi import HTTPException
-    from pymongo.errors import PyMongoError
+    response = extrair_texto(output["messages"][-1])
+    proposals = []
+    tool_failures = []
+    for message in reversed(output["messages"]):
+        if message.type == "human":
+            break
+        if message.type == "tool":
+            try:
+                data = json.loads(extrair_texto(message))
+                if isinstance(data, dict) and data.get("proposal"):
+                    proposals.append(data["proposal"])
+                elif (
+                    isinstance(data, dict)
+                    and data.get("ok") is False
+                    and data.get("code")
+                    not in {"JEV_REJECTED", "TOOL_FAILED", CODIGO_CANCELADA}
+                ):
+                    tool_failures.append(
+                        f"{data.get('code', 'ERRO')}: {data.get('message', 'Etapa não confirmada.')}"
+                    )
+            except (ValueError, TypeError):
+                pass
+    if proposals:
+        response = resposta_de_propostas(
+            list(reversed(proposals)), list(reversed(tool_failures))
+        )
+        if output.get("jev_halt"):
+            response += "\n" + output["jev_halt"]
+    artifacts = []
+    pending_actions = []
+    if proposals:
+        # Usa a proposta persistida, nunca parâmetros reescritos pelo modelo.
+        pending_actions = [
+            PendingAction(
+                id=p["id"],
+                proposal_hash=p["proposal_hash"],
+                operation=p["action"]["operation"],
+                parameters=p["action"]["parameters"],
+                justification=p["justification"],
+                status=p["status"],
+                expires_at=p["expires_at"],
+                before=p["before"],
+            )
+            for p in reversed(proposals)
+        ]
+    elif not output.get("jev_halt"):
+        from iai.app.core.assistant.artifacts import present
 
-    ctx = context()
-    if user_id != ctx.identity.user_id:
-        raise HTTPException(403, "user_id diverge da identidade autenticada.")
-    k = ctx.identity.kitchen_id
+        anonymous_question, _ = anonimizar_entrada(pergunta_usuario)
+        artifacts, description = present(
+            anonymous_question,
+            output["messages"],
+            demo=LLM_MODE == "demo",
+            jev_calls=output.get("jev_calls", {}) if LLM_MODE == "live" else None,
+            config={"callbacks": [coletor]},
+            fetch_missing=True,
+        )
+        if artifacts:
+            response = description
+        elif description:
+            response = (response + "\n" + description).strip()
+    if not response.strip():
+        response = (
+            "Não consegui montar essa resposta agora. Tente de novo em instantes."
+        )
+    if tool_failures and not proposals:
+        response += "\nFontes/etapas indisponíveis:\n" + "\n".join(
+            reversed(tool_failures)
+        )
+    if BUSINESS_MODE == "mock":
+        response = "[DADOS OPERACIONAIS MOCK — demonstração]\n" + response
+    if LLM_MODE == "demo":
+        response = "[INTERPRETAÇÃO DEMO limitada — sem LLM]\n" + response
+    from iai.app.core.infra.privacy import remove_secrets
+
+    response = remove_secrets(response)
+    anonymous, _ = anonimizar_entrada(pergunta_usuario)
+    salvar_mensagem(session_id, "human", anonymous, user_id=user_id, kitchen_id=k)
+    salvar_mensagem(session_id, "iai", response, user_id=user_id, kitchen_id=k)
+    return ChatResponse(
+        resposta=response, artifacts=artifacts, pending_actions=pending_actions
+    )
+
+
+def _estado_inicial(pergunta_usuario: str, session_id: str, user_id: str, k) -> Estado:
     iniciar_sessao(session_id, user_id=user_id, kitchen_id=k)
     previous = mensagens_ativas(session_id, user_id, k)[-30:]
     history = [
@@ -633,7 +718,7 @@ def executar_fluxo_chat(
         else {"role": "assistant", "content": anonimizar_entrada(m.content)[0]}
         for m in previous
     ]
-    estado_inicial = cast(
+    return cast(
         Estado,
         {
             "messages": history + [HumanMessage(content=pergunta_usuario)],
@@ -645,6 +730,43 @@ def executar_fluxo_chat(
             "jev_halt": None,
         },
     )
+
+
+def _config_fluxo(session_id: str, user_id: str, k, coletor) -> RunnableConfig:
+    return {
+        "configurable": {"thread_id": session_id, "user_id": user_id, "kitchen_id": k},
+        "recursion_limit": 80,
+        "max_concurrency": 4,
+        "callbacks": [coletor],
+        "run_name": "iai_chat",
+        "tags": ["iai"],
+        "metadata": {"session_id": session_id, "user_id": user_id},
+    }
+
+
+def _exigir_provedores():
+    from fastapi import HTTPException
+
+    from iai.app.core.config import GEMINI_API_KEY, GROQ_API_KEY
+
+    if not GROQ_API_KEY.get_secret_value() or not GEMINI_API_KEY.get_secret_value():
+        raise HTTPException(
+            503,
+            "Provedores LLM não configurados. Configure chaves ou habilite explicitamente o modo demo.",
+        )
+
+
+def executar_fluxo_chat(
+    pergunta_usuario: str, session_id: str, user_id: str = "user_test"
+) -> ChatResponse:
+    from fastapi import HTTPException
+    from pymongo.errors import PyMongoError
+
+    ctx = context()
+    if user_id != ctx.identity.user_id:
+        raise HTTPException(403, "user_id diverge da identidade autenticada.")
+    k = ctx.identity.kitchen_id
+    estado_inicial = _estado_inicial(pergunta_usuario, session_id, user_id, k)
     coletor = ColetorMetricas()
     started = perf_counter()
     status = "ok"
@@ -656,115 +778,15 @@ def executar_fluxo_chat(
 
             output = demo_graph.invoke(estado_inicial)
         else:
-            from iai.app.core.config import GEMINI_API_KEY, GROQ_API_KEY
-
-            if (
-                not GROQ_API_KEY.get_secret_value()
-                or not GEMINI_API_KEY.get_secret_value()
-            ):
-                raise HTTPException(
-                    503,
-                    "Provedores LLM não configurados. Configure chaves ou habilite explicitamente o modo demo.",
-                )
+            _exigir_provedores()
             with live_tool_scope():
                 output = fluxo_agentes.invoke(
                     estado_inicial,
-                    config={
-                        "configurable": {
-                            "thread_id": session_id,
-                            "user_id": user_id,
-                            "kitchen_id": k,
-                        },
-                        "recursion_limit": 80,
-                        "max_concurrency": 4,
-                        "callbacks": [coletor],
-                        "run_name": "iai_chat",
-                        "tags": ["iai"],
-                        "metadata": {"session_id": session_id, "user_id": user_id},
-                    },
+                    config=_config_fluxo(session_id, user_id, k, coletor),
                 )
 
-        response = extrair_texto(output["messages"][-1])
-        proposals = []
-        tool_failures = []
-        for message in reversed(output["messages"]):
-            if message.type == "human":
-                break
-            if message.type == "tool":
-                try:
-                    data = json.loads(extrair_texto(message))
-                    if isinstance(data, dict) and data.get("proposal"):
-                        proposals.append(data["proposal"])
-                    elif (
-                        isinstance(data, dict)
-                        and data.get("ok") is False
-                        and data.get("code")
-                        not in {"JEV_REJECTED", "TOOL_FAILED", CODIGO_CANCELADA}
-                    ):
-                        tool_failures.append(
-                            f"{data.get('code', 'ERRO')}: {data.get('message', 'Etapa não confirmada.')}"
-                        )
-                except (ValueError, TypeError):
-                    pass
-        if proposals:
-            response = resposta_de_propostas(
-                list(reversed(proposals)), list(reversed(tool_failures))
-            )
-            if output.get("jev_halt"):
-                response += "\n" + output["jev_halt"]
-        artifacts = []
-        pending_actions = []
-        if proposals:
-            # Usa a proposta persistida, nunca parâmetros reescritos pelo modelo.
-            pending_actions = [
-                PendingAction(
-                    id=p["id"],
-                    proposal_hash=p["proposal_hash"],
-                    operation=p["action"]["operation"],
-                    parameters=p["action"]["parameters"],
-                    justification=p["justification"],
-                    status=p["status"],
-                    expires_at=p["expires_at"],
-                    before=p["before"],
-                )
-                for p in reversed(proposals)
-            ]
-        elif not output.get("jev_halt"):
-            from iai.app.core.assistant.artifacts import present
-
-            anonymous_question, _ = anonimizar_entrada(pergunta_usuario)
-            artifacts, description = present(
-                anonymous_question,
-                output["messages"],
-                demo=LLM_MODE == "demo",
-                jev_calls=output.get("jev_calls", {}) if LLM_MODE == "live" else None,
-                config={"callbacks": [coletor]},
-                fetch_missing=True,
-            )
-            if artifacts:
-                response = description
-            elif description:
-                response = (response + "\n" + description).strip()
-        if not response.strip():
-            response = (
-                "Não consegui montar essa resposta agora. Tente de novo em instantes."
-            )
-        if tool_failures and not proposals:
-            response += "\nFontes/etapas indisponíveis:\n" + "\n".join(
-                reversed(tool_failures)
-            )
-        if BUSINESS_MODE == "mock":
-            response = "[DADOS OPERACIONAIS MOCK — demonstração]\n" + response
-        if LLM_MODE == "demo":
-            response = "[INTERPRETAÇÃO DEMO limitada — sem LLM]\n" + response
-        from iai.app.core.infra.privacy import remove_secrets
-
-        response = remove_secrets(response)
-        anonymous, _ = anonimizar_entrada(pergunta_usuario)
-        salvar_mensagem(session_id, "human", anonymous, user_id=user_id, kitchen_id=k)
-        salvar_mensagem(session_id, "iai", response, user_id=user_id, kitchen_id=k)
-        return ChatResponse(
-            resposta=response, artifacts=artifacts, pending_actions=pending_actions
+        return _montar_resposta(
+            output, pergunta_usuario, session_id, user_id, k, coletor
         )
     except (HTTPException, PyMongoError) as exc:
         status = "erro"
@@ -775,6 +797,96 @@ def executar_fluxo_chat(
         message, error_type = mensagem_de_falha(exc)
         logger.error("Fluxo do assessor falhou: %s", resumo_para_log(exc))
         raise HTTPException(502, message) from None
+    finally:
+        registrar_requisicao(
+            coletor,
+            started,
+            session_id,
+            ctx.identity,
+            output,
+            falhou=status == "erro",
+            error_type=error_type,
+        )
+
+
+class ClienteDesistiu(Exception):
+    """O app fechou a conexão: o grafo para de gastar LLM."""
+
+
+def executar_fluxo_chat_stream(
+    pergunta_usuario: str,
+    session_id: str,
+    user_id: str = "user_test",
+    cancelado: Event | None = None,
+) -> Iterator[dict]:
+    """Mesmo fluxo de `executar_fluxo_chat`, contando o que acontece enquanto acontece.
+
+    Etapas, pensamento e progresso das tools saem ao vivo. Artefatos, cartões e o texto só saem
+    depois que o grafo (e o JEV) terminaram: o usuário nunca lê uma frase que o juiz trocaria.
+    """
+    from fastapi import HTTPException
+    from pymongo.errors import PyMongoError
+
+    ctx = context()
+    if user_id != ctx.identity.user_id:
+        raise HTTPException(403, "user_id diverge da identidade autenticada.")
+    k = ctx.identity.kitchen_id
+    coletor = ColetorMetricas()
+    started = perf_counter()
+    status = "ok"
+    error_type = None
+    output: dict = {}
+    try:
+        estado_inicial = _estado_inicial(pergunta_usuario, session_id, user_id, k)
+        if LLM_MODE == "demo":
+            from iai.app.extras.demo import demo_graph
+
+            output = demo_graph.invoke(estado_inicial)
+        else:
+            _exigir_provedores()
+            with live_tool_scope():
+                # Com stream_mode em lista e subgraphs=True, cada item é (namespace, modo, dado).
+                partes = cast(
+                    Iterator[tuple[tuple, str, Any]],
+                    fluxo_agentes.stream(
+                        estado_inicial,
+                        config=_config_fluxo(session_id, user_id, k, coletor),
+                        stream_mode=["tasks", "custom", "messages", "values"],
+                        subgraphs=True,
+                    ),
+                )
+                for ns, modo, parte in partes:
+                    if cancelado is not None and cancelado.is_set():
+                        raise ClienteDesistiu
+                    if modo == "values":
+                        if not ns:  # o estado do grafo principal; subgrafos não contam
+                            output = parte
+                        continue
+                    evento = eventos_do_fluxo.traduzir(ns, modo, parte)
+                    if evento:
+                        yield evento
+        resposta = _montar_resposta(
+            output, pergunta_usuario, session_id, user_id, k, coletor
+        )
+        yield from eventos_do_fluxo.eventos_finais(
+            resposta, interrompida=bool(output.get("jev_halt")), cancelado=cancelado
+        )
+    except ClienteDesistiu:
+        status = "erro"
+        error_type = "ClienteDesistiu"
+    except (HTTPException, PyMongoError) as exc:
+        status = "erro"
+        error_type = type(exc).__name__
+        detalhe = exc.detail if isinstance(exc, HTTPException) else None
+        yield {
+            "type": "erro",
+            "mensagem": detalhe or "Persistência indisponível. Tente de novo.",
+        }
+    except Exception as exc:  # noqa: BLE001 - não expor mensagens de SDK com credenciais
+        status = "erro"
+        message, error_type = mensagem_de_falha(exc)
+        logger.error("Fluxo do assessor falhou: %s", resumo_para_log(exc))
+        yield {"type": "erro", "mensagem": message}
     finally:
         registrar_requisicao(
             coletor,

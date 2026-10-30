@@ -1,8 +1,14 @@
+import asyncio
+import json
+import logging
+import threading
 import uuid
+from contextvars import copy_context
 from dataclasses import replace
 from typing import Annotated
 
 from fastapi import APIRouter, File, Form, HTTPException, Query, UploadFile
+from fastapi.responses import StreamingResponse
 
 from iai.app.core.assistant.memory import (
     encerrar_sessao,
@@ -24,6 +30,7 @@ from iai.app.core.schemas import (
 )
 from iai.app.extras.audio import TAMANHO_MAXIMO_BYTES, transcrever_audio
 
+logger = logging.getLogger(__name__)
 router = APIRouter(tags=["chat"])
 
 
@@ -47,6 +54,77 @@ def chat(payload: ChatRequest, ctx: Authenticated) -> ChatResponse:
         raise HTTPException(403, "user_id diverge da identidade autenticada.")
     return executar_no_contexto(
         ctx, payload.pergunta, payload.session_id, payload.request_id
+    )
+
+
+PING_SEGUNDOS = 8
+FIM_DO_STREAM = object()
+
+
+def eventos_ndjson(ctx, payload: ChatRequest):
+    """Roda o grafo numa thread própria e entrega cada evento como uma linha NDJSON.
+
+    O contexto da requisição (contextvars) só vale dentro da thread que o criou; por isso o
+    gerador inteiro roda lá e a parte assíncrona só lê a fila. Linha em branco = sinal de vida.
+    """
+    from iai.app.core.assistant.graph import executar_fluxo_chat_stream
+
+    fila: asyncio.Queue = asyncio.Queue()
+    cancelado = threading.Event()
+    loop = asyncio.get_running_loop()
+
+    def produzir():
+        marker = current_context.set(
+            replace(
+                ctx,
+                session_id=payload.session_id,
+                turn_id=payload.request_id or str(uuid.uuid4()),
+            )
+        )
+        try:
+            for evento in executar_fluxo_chat_stream(
+                payload.pergunta, payload.session_id, ctx.identity.user_id, cancelado
+            ):
+                loop.call_soon_threadsafe(fila.put_nowait, evento)
+        except Exception as exc:  # noqa: BLE001 - depois do 200 o erro só pode ser um evento
+            logger.error("Stream do chat falhou: %s", type(exc).__name__)
+            loop.call_soon_threadsafe(
+                fila.put_nowait,
+                {"type": "erro", "mensagem": "Tive um erro interno. Tente de novo."},
+            )
+        finally:
+            current_context.reset(marker)
+            loop.call_soon_threadsafe(fila.put_nowait, FIM_DO_STREAM)
+
+    async def gerar():
+        thread = threading.Thread(
+            target=copy_context().run, args=(produzir,), daemon=True
+        )
+        thread.start()
+        try:
+            while True:
+                try:
+                    evento = await asyncio.wait_for(fila.get(), PING_SEGUNDOS)
+                except TimeoutError:
+                    yield "\n"
+                    continue
+                if evento is FIM_DO_STREAM:
+                    return
+                yield json.dumps(evento, ensure_ascii=False) + "\n"
+        finally:
+            cancelado.set()  # app fechou a conexão: o grafo para de gastar LLM
+
+    return gerar()
+
+
+@router.post("/chat/stream")
+async def chat_stream(payload: ChatRequest, ctx: Authenticated):
+    if payload.user_id != ctx.identity.user_id:
+        raise HTTPException(403, "user_id diverge da identidade autenticada.")
+    return StreamingResponse(
+        eventos_ndjson(ctx, payload),
+        media_type="application/x-ndjson",
+        headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
     )
 
 

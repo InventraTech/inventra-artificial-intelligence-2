@@ -31,7 +31,7 @@ from langchain_core.messages import AIMessage, ToolMessage
 from langgraph.types import Command
 from pydantic import BaseModel, Field, ValidationError
 
-from iai.app.core.assistant import judge
+from iai.app.core.assistant import eventos_do_fluxo, judge
 from iai.app.core.config import (
     GEMINI_API_KEY,
     GROQ_API_KEY,
@@ -191,7 +191,15 @@ def protect_tool(tool):
             ):
                 raise PermissionError("Tool sem autorização prévia válida.")
             permit["used"] = True
-        return original(*args, **kwargs)
+        passo = eventos_do_fluxo.passo_da_tool(tool.name)
+        if passo is None:
+            return original(*args, **kwargs)
+        etapa_id = f"{tool.name}:{uuid4().hex[:8]}"
+        eventos_do_fluxo.avisar(eventos_do_fluxo.etapa(etapa_id, "inicio", passo[0]))
+        try:
+            return original(*args, **kwargs)
+        finally:
+            eventos_do_fluxo.avisar(eventos_do_fluxo.etapa(etapa_id, "fim", passo[1]))
 
     guarded._iai_protected = True
     tool.func = guarded
