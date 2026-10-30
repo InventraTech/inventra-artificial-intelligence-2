@@ -43,6 +43,8 @@ CODIGO_CANCELADA = "PROPOSTA_CANCELADA"
 FRASE_SEM_APOIO = "Não consegui confirmar essa resposta com os dados consultados. Reformule o pedido ou consulte o dado diretamente."
 MAX_TENTATIVAS = 2  # a original e uma volta ao especialista
 MAX_RESULTADO = 3000
+MAX_RESULTADO_TEXTO = 12000
+MAX_ESTADO_TEXTO = 30000
 MAX_TEXTO = 4000
 
 CORRECOES_ESCRITA = {
@@ -140,9 +142,9 @@ def propostas_do_turno(turno) -> list[tuple[ToolMessage, dict]]:
     return achadas
 
 
-def _evidencia(turno) -> list[dict]:
+def _evidencia(turno, limite=MAX_RESULTADO) -> list[dict]:
     return [
-        {"tool": m.name, "result": _texto(m)[:MAX_RESULTADO]}
+        {"tool": m.name, "result": _texto(m)[:limite]}
         for m in turno
         if m.type == "tool"
         and m.status != "error"
@@ -295,7 +297,7 @@ def _julgar_texto(agente, pergunta, turno, tentativa, evidencia_literal=None):
     evidencia = (
         [{"tool": "faq_retriever", "result": evidencia_literal[:MAX_RESULTADO]}]
         if evidencia_literal is not None
-        else _evidencia(turno)
+        else _evidencia(turno, MAX_RESULTADO_TEXTO)
     )
     if not texto:
         return Veredito("PULADO")
@@ -313,9 +315,10 @@ def _julgar_texto(agente, pergunta, turno, tentativa, evidencia_literal=None):
             "rules": REGRAS_TEXTO,
             "business_date": business_date().isoformat(),
         }
-        if len(json.dumps(corpo, ensure_ascii=False)) > 30000:
+        if len(json.dumps(corpo, ensure_ascii=False)) > MAX_ESTADO_TEXTO:
+            parte = max(1000, (MAX_ESTADO_TEXTO - 6000) // len(corpo["evidence"]))
             corpo["evidence"] = [
-                {**item, "result": item["result"][: MAX_RESULTADO // 3]}
+                {**item, "result": item["result"][:parte]}
                 for item in corpo["evidence"]
             ]
         estado = sanitized(corpo)
