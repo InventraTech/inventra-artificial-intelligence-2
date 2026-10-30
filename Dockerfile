@@ -25,8 +25,9 @@ ENV PATH=/opt/venv/bin:$PATH \
     PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1
 
-RUN adduser -D appuser && chown -R appuser:appuser /app
-USER appuser
+# UID numérico: o Kubernetes (runAsNonRoot) não aceita usuário só por nome.
+RUN adduser -D -u 10001 appuser && chown -R appuser:appuser /app
+USER 10001
 
 EXPOSE 8000
 
