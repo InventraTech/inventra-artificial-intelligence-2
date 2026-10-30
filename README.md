@@ -288,8 +288,7 @@ a demonstração offline. Não publique o arquivo `.env` local.
 | IAI_BUSINESS_MODE | mock ou spring |
 | IAI_STORAGE_MODE | mock ou mongo |
 | IAI_LLM_MODE | demo ou live |
-| INVENTRA_API_URL | base Spring, localhost em HTTP ou endereço remoto HTTPS |
-| INVENTRA_HTTP_TIMEOUT | segundos; padrão 10 |
+| INVENTRA_API_URL | base Spring, localhost em HTTP ou endereço remoto HTTPS || INVENTRA_HTTP_TIMEOUT | segundos; padrão 10 |
 | MONGO_CONNECTION | MongoDB; não inclua credenciais no Git |
 | GEMINI_API_KEY / GROQ_API_KEY | provedores para agentes live |
 | TYPESAFE_API_KEY | TypeSafe/JEV que julga o turno dos agentes live; sem ele ou fora do ar, a escrita é cancelada (falha fechada) e a leitura segue sem o juiz |
