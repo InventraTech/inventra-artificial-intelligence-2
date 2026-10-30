@@ -30,6 +30,12 @@ if not 0.5 < JEV_APPROVAL_THRESHOLD <= 1 or not 0 < JEV_TIMEOUT <= 60:
     raise ValueError(
         "Configuração JEV inválida: limiar > 0.5 e <= 1; timeout > 0 e <= 60."
     )
+# "on" (padrão): o Gemini devolve resumos do raciocínio, mostrados ao vivo no /chat/stream.
+# O juiz não confere esse texto; ele nunca entra na resposta final nem no histórico.
+IAI_PENSAMENTO = os.getenv("IAI_PENSAMENTO", "on").strip().lower()
+if IAI_PENSAMENTO not in {"on", "off"}:
+    raise ValueError("IAI_PENSAMENTO inválido; use 'on' ou 'off'.")
+PENSAMENTO = IAI_PENSAMENTO == "on"
 MONGO_CONNECTION = SecretStr(os.getenv("MONGO_CONNECTION", "mongodb://localhost:27017"))
 
 # --- Arquivos enviados pelo usuário (índice vetorial no Qdrant) ------------------------------
