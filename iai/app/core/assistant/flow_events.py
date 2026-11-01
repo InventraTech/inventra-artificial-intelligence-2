@@ -23,8 +23,10 @@ from langgraph.config import get_stream_writer
 from iai.app.core.infra.privacy import remove_secrets
 from iai.app.core.schemas import ChatResponse
 
-# Nó -> (texto ao começar, texto ao terminar). Nós ausentes (guardrails de entrada) ficam em silêncio.
+# Nó -> (texto ao começar, texto ao terminar). Toda mensagem passa pelos guardrails, então sempre há fluxo.
 PASSOS_DO_GRAFO: dict[str, tuple[str, str]] = {
+    "guardrail_insulto": ("Verificando a mensagem…", "Mensagem verificada"),
+    "guardrail_escopo": ("Checando o assunto…", "Assunto liberado"),
     "roteador": ("Entendendo o pedido…", "Entendi o pedido"),
     "estoquista": ("Analisando o estoque…", "Estoque analisado"),
     "comprador": ("Analisando as compras…", "Compras analisadas"),
@@ -66,11 +68,31 @@ def avisar(evento: dict) -> None:
         get_stream_writer()(evento)
 
 
-def etapa(id_: str, status: str, texto: str | None = None) -> dict:
+def etapa(
+    id_: str,
+    status: str,
+    texto: str | None = None,
+    pai: str | None = None,
+    detalhe: str | None = None,
+) -> dict:
+    """`pai`: id do passo em que este roda (a tool dentro do nó); `detalhe`: o comando executado."""
     evento = {"type": "etapa", "id": id_, "status": status}
     if texto:
         evento["texto"] = texto
+    if pai:
+        evento["pai"] = pai
+    if detalhe:
+        evento["detalhe"] = detalhe
     return evento
+
+
+def comando(nome: str, argumentos: dict) -> str:
+    """`nome(chave='valor', ...)`: o que a tool vai rodar, para o app mostrar sob o passo."""
+    partes = []
+    for chave, valor in argumentos.items():
+        texto = repr(valor) if isinstance(valor, str) else str(valor)
+        partes.append(f"{chave}={texto[:80]}")
+    return remove_secrets(f"{nome}({', '.join(partes)})")[:400]
 
 
 def _etapa_de_tarefa(tarefa: dict) -> dict | None:
@@ -110,10 +132,47 @@ def traduzir(ns: tuple, modo: str, parte) -> dict | None:
     if modo == "tasks" and isinstance(parte, dict) and not ns:
         return _etapa_de_tarefa(parte)
     if modo == "custom" and isinstance(parte, dict) and parte.get("type") == "etapa":
+        if ns and ":" in ns[0] and "pai" not in parte:
+            # O nome do subgrafo é "<nó>:<id da tarefa>": o id da tarefa é o do passo do nó.
+            return {**parte, "pai": ns[0].split(":", 1)[1]}
         return parte
     if modo == "messages" and isinstance(parte, tuple) and len(parte) == 2:
         return _pensamento(parte[0], ns)
     return None
+
+
+class RegistroDoStream:
+    """O que o app mostrou além do texto (passos e raciocínio), para a conversa reabrir igual."""
+
+    def __init__(self):
+        self.passos: dict[str, dict] = {}
+        self.pensamento = ""
+        self._ultimo_pensador: str | None = None
+
+    def aplicar(self, evento: dict) -> None:
+        if evento["type"] == "etapa":
+            atual = self.passos.setdefault(
+                evento["id"], {"id": evento["id"], "texto": "", "concluido": False}
+            )
+            atual["texto"] = evento.get("texto") or atual["texto"]
+            atual["concluido"] = evento["status"] == "fim"
+            for chave in ("pai", "detalhe"):
+                if evento.get(chave):
+                    atual[chave] = evento[chave]
+        elif evento["type"] == "pensamento":
+            if self.pensamento and self._ultimo_pensador != evento["id"]:
+                self.pensamento += "\n\n"
+            self._ultimo_pensador = evento["id"]
+            self.pensamento += evento["delta"]
+
+    def extras(self) -> dict:
+        extras: dict = {}
+        if self.passos:
+            # Passo que ainda girava quando a resposta saiu deixou de ser relevante.
+            extras["passos"] = [{**p, "concluido": True} for p in self.passos.values()]
+        if self.pensamento:
+            extras["pensamento"] = self.pensamento
+        return extras
 
 
 def fatiar(texto: str, tamanho: int = TAMANHO_PEDACO) -> Iterator[str]:

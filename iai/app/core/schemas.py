@@ -109,6 +109,11 @@ class SessaoResumo(BaseModel):
     doc_id: str
     started_at: datetime
     summary: str
+    # Título curto do assunto da conversa; ausente nas sessões encerradas antes desse campo existir.
+    titulo: str | None = None
+    # Id da sessão no app e se ela ainda está aberta: o app esconde a conversa que está na tela.
+    session_id: str | None = None
+    ativa: bool = False
 
 
 class HistoricoResponse(BaseModel):
@@ -118,6 +123,10 @@ class HistoricoResponse(BaseModel):
 class MensagemHistorico(BaseModel):
     role: str
     content: str
+    # O que a IA mostrou junto com a resposta (só nas mensagens dela, quando foram guardados).
+    passos: list[dict] | None = None
+    pensamento: str | None = None
+    artifacts: list[dict] | None = None
 
 
 class MensagensResponse(BaseModel):

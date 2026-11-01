@@ -50,7 +50,7 @@ MOTIVOS_DE_RECUSA = {
     "arguments_grounded": "não consegui identificar com certeza o produto, fornecedor ou lote citado. Diga o nome completo (e a marca ou a unidade).",
     "business_rule_conflict": "esse pedido conflita com uma regra do Inventra.",
     "unsafe_modification": "essa alteração precisa de confirmação humana.",
-    "missing_user_information": "falta uma informação que só você sabe.",
+    "missing_user_information": "preciso confirmar algum dado com você (produto, quantidade ou lote). Diga o nome completo do produto e a quantidade.",
 }
 
 
@@ -169,9 +169,9 @@ def protect_tool(tool):
 
     @wraps(original)
     def guarded(*args, **kwargs):
+        values = {}
         if scope_var.get() is not None:
             bound = inspect.signature(original).bind(*args, **kwargs)
-            values = {}
             for key, value in bound.arguments.items():
                 if key == "config":
                     continue
@@ -195,7 +195,15 @@ def protect_tool(tool):
         if passo is None:
             return original(*args, **kwargs)
         etapa_id = f"{tool.name}:{uuid4().hex[:8]}"
-        flow_events.avisar(flow_events.etapa(etapa_id, "inicio", passo[0]))
+        argumentos = values or {k: v for k, v in kwargs.items() if k != "config"}
+        flow_events.avisar(
+            flow_events.etapa(
+                etapa_id,
+                "inicio",
+                passo[0],
+                detalhe=flow_events.comando(tool.name, argumentos),
+            )
+        )
         try:
             return original(*args, **kwargs)
         finally:

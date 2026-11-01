@@ -178,6 +178,16 @@ def _preparar_faq(state):
     return {"messages": [candidate], **updates}
 
 
+_LINHA_DE_FONTE = re.compile(
+    r"^\W*fonte\b.*$|faq_inventra\.jsonl\S*", re.IGNORECASE | re.MULTILINE
+)
+
+
+def sem_fonte(texto: str) -> str:
+    """O usuário não precisa ver de onde veio o trecho do FAQ (linha de arquivo, "Fonte: ...")."""
+    return re.sub(r"\n{3,}", "\n\n", _LINHA_DE_FONTE.sub("", texto)).strip()
+
+
 def _redigir_faq(state, config):
     stopped = faq_gate.before_model(state, None)
     if stopped and stopped.get("jev_halt"):
@@ -213,7 +223,9 @@ def _redigir_faq(state, config):
         ),
     ]
     try:
-        answer = extrair_texto(llm_especialista.invoke(entrada, config=config)).strip()
+        answer = sem_fonte(
+            extrair_texto(llm_especialista.invoke(entrada, config=config))
+        )
     except Exception as exc:  # noqa: BLE001 - evidência já autorizada permite fallback literal
         logger.warning(
             "FAQ: modelo falhou (%s); usando evidência literal.", resumo_para_log(exc)
@@ -620,7 +632,13 @@ def executar_fluxo_assessor(
 
 
 def _montar_resposta(
-    output: dict, pergunta_usuario: str, session_id: str, user_id: str, k, coletor
+    output: dict,
+    pergunta_usuario: str,
+    session_id: str,
+    user_id: str,
+    k,
+    coletor,
+    extras: dict | None = None,
 ) -> ChatResponse:
     """Transforma a saída do grafo na resposta final e grava só o texto aprovado no histórico."""
     import json
@@ -703,7 +721,18 @@ def _montar_resposta(
     response = remove_secrets(response)
     anonymous, _ = anonimizar_entrada(pergunta_usuario)
     salvar_mensagem(session_id, "human", anonymous, user_id=user_id, kitchen_id=k)
-    salvar_mensagem(session_id, "iai", response, user_id=user_id, kitchen_id=k)
+    # Gráficos e tabelas ficam guardados para a conversa reabrir do jeito que foi vista.
+    extras = {
+        **(extras or {}),
+        **(
+            {"artifacts": [a.model_dump(mode="json") for a in artifacts]}
+            if artifacts
+            else {}
+        ),
+    }
+    salvar_mensagem(
+        session_id, "iai", response, user_id=user_id, kitchen_id=k, extras=extras
+    )
     return ChatResponse(
         resposta=response, artifacts=artifacts, pending_actions=pending_actions
     )
@@ -832,6 +861,7 @@ def executar_fluxo_chat_stream(
         raise HTTPException(403, "user_id diverge da identidade autenticada.")
     k = ctx.identity.kitchen_id
     coletor = ColetorMetricas()
+    registro = flow_events.RegistroDoStream()
     started = perf_counter()
     status = "ok"
     error_type = None
@@ -864,9 +894,16 @@ def executar_fluxo_chat_stream(
                         continue
                     evento = flow_events.traduzir(ns, modo, parte)
                     if evento:
+                        registro.aplicar(evento)
                         yield evento
         resposta = _montar_resposta(
-            output, pergunta_usuario, session_id, user_id, k, coletor
+            output,
+            pergunta_usuario,
+            session_id,
+            user_id,
+            k,
+            coletor,
+            extras=registro.extras(),
         )
         yield from flow_events.eventos_finais(
             resposta, interrompida=bool(output.get("jev_halt")), cancelado=cancelado
