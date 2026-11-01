@@ -7,7 +7,7 @@ import pytest
 from fastapi.testclient import TestClient
 from langchain_core.messages import AIMessage, AIMessageChunk, HumanMessage
 
-from iai.app.core.assistant import eventos_do_fluxo, graph
+from iai.app.core.assistant import flow_events, graph
 from iai.app.core.infra.security import current_context
 from iai.app.core.infra.storage import get_db
 from iai.app.main import app
@@ -28,7 +28,7 @@ def linhas(response):
 
 @pytest.fixture
 def client(monkeypatch):
-    monkeypatch.setattr(eventos_do_fluxo, "INTERVALO_ENTRE_PEDACOS", 0)
+    monkeypatch.setattr(flow_events, "INTERVALO_ENTRE_PEDACOS", 0)
     with TestClient(app) as client:
         yield client
 
@@ -104,7 +104,7 @@ def executar(pergunta="Quanto tenho?", cancelado=None):
 
 
 def test_ao_vivo_etapas_pensamento_e_texto_so_depois_do_grafo(monkeypatch):
-    monkeypatch.setattr(eventos_do_fluxo, "INTERVALO_ENTRE_PEDACOS", 0)
+    monkeypatch.setattr(flow_events, "INTERVALO_ENTRE_PEDACOS", 0)
     pensamento = AIMessageChunk(
         content=[{"type": "thinking", "thinking": "Vou somar os lotes."}]
     )
@@ -143,16 +143,18 @@ def test_ao_vivo_etapas_pensamento_e_texto_so_depois_do_grafo(monkeypatch):
     assert fluxo.modos == ["tasks", "custom", "messages", "values"]
     assert fluxo.subgraphs is True
     tipos = [e["type"] for e in eventos]
-    assert tipos[:4] == ["etapa", "etapa", "etapa", "pensamento"]
-    assert eventos[2]["texto"] == "Consultando…"
-    assert eventos[0] == {
+    assert tipos[:5] == ["etapa", "etapa", "etapa", "etapa", "pensamento"]
+    # Todo turno começa pelos guardrails, então há fluxo mesmo em mensagens simples.
+    assert eventos[0]["texto"] == "Verificando a mensagem…"
+    assert eventos[3]["texto"] == "Consultando…"
+    assert eventos[1] == {
         "type": "etapa",
         "id": "b",
         "status": "inicio",
         "texto": "Entendendo o pedido…",
     }
-    assert eventos[1]["texto"] == "Entendi o pedido"
-    assert eventos[3] == {
+    assert eventos[2]["texto"] == "Entendi o pedido"
+    assert eventos[4] == {
         "type": "pensamento",
         "id": "estoquista",
         "delta": "Vou somar os lotes.",
@@ -170,7 +172,7 @@ def test_ao_vivo_etapas_pensamento_e_texto_so_depois_do_grafo(monkeypatch):
 
 
 def test_resposta_segura_do_juiz_termina_como_segura(monkeypatch):
-    monkeypatch.setattr(eventos_do_fluxo, "INTERVALO_ENTRE_PEDACOS", 0)
+    monkeypatch.setattr(flow_events, "INTERVALO_ENTRE_PEDACOS", 0)
     parada = "Não consegui confirmar essa resposta com os dados consultados."
     ao_vivo(monkeypatch, [((), "values", {**saida(parada), "jev_halt": parada})])
     eventos = executar()
@@ -228,6 +230,50 @@ def test_pensamento_do_modelo_fica_fora_do_texto_da_resposta():
 
 def test_fatiar_nao_quebra_palavras():
     texto = "Você tem doze produtos com estoque abaixo do mínimo hoje."
-    pedacos = list(eventos_do_fluxo.fatiar(texto, 12))
+    pedacos = list(flow_events.fatiar(texto, 12))
     assert "".join(pedacos) == texto
     assert all(p.strip().count(" ") >= 0 and not p.startswith(" ") for p in pedacos)
+
+
+def test_tool_dentro_do_no_sai_como_filha_do_passo_do_no():
+    evento = {"type": "etapa", "id": "t1", "status": "inicio", "texto": "Consultando…"}
+
+    traduzido = flow_events.traduzir(("estoquista:tarefa-9",), "custom", evento)
+
+    # O nome do subgrafo é "<nó>:<id da tarefa>", e o id da tarefa é o id do passo do nó.
+    assert traduzido == {**evento, "pai": "tarefa-9"}
+    # No grafo principal (sem subgrafo) o evento passa como veio.
+    assert flow_events.traduzir((), "custom", evento) == evento
+
+
+def test_comando_mostra_a_chamada_sem_segredos_e_sem_exagero():
+    texto = flow_events.comando(
+        "planejar_baixa", {"product_name": "chá", "quantity": "3"}
+    )
+    assert texto == "planejar_baixa(product_name='chá', quantity='3')"
+    longo = flow_events.comando("consultar_inventra", {"name": "x" * 1000})
+    assert len(longo) <= 400
+
+
+def test_registro_guarda_pai_e_detalhe_dos_passos():
+    registro = flow_events.RegistroDoStream()
+
+    registro.aplicar(
+        flow_events.etapa(
+            "t1",
+            "inicio",
+            "Planejando a baixa por lote…",
+            pai="n1",
+            detalhe="planejar_baixa(q='3')",
+        )
+    )
+    registro.aplicar(flow_events.etapa("t1", "fim", "Baixa planejada"))
+
+    (passo,) = registro.extras()["passos"]
+    assert passo == {
+        "id": "t1",
+        "texto": "Baixa planejada",
+        "concluido": True,
+        "pai": "n1",
+        "detalhe": "planejar_baixa(q='3')",
+    }

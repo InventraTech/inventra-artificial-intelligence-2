@@ -16,9 +16,9 @@ from dataclasses import dataclass
 from langchain_core.prompts import ChatPromptTemplate
 from pydantic import BaseModel
 
-from iai.app.core.arquivos.seguranca import ArquivoRecusado
 from iai.app.core.assistant.guardrail import normalizar_texto
 from iai.app.core.config import ARQUIVOS_GUARDRAIL_LLM, LLM_MODE
+from iai.app.core.files.security import ArquivoRecusado
 from iai.app.core.infra.privacy import remove_secrets
 
 logger = logging.getLogger("iai.arquivos")

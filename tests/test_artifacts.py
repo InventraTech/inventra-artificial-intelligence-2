@@ -357,6 +357,30 @@ def test_grouped_requisition_bar_and_category_pie_are_derived_counts():
     assert visual[0].labels == ["A", "B"] and visual[0].datasets[0].data == [2, 1]
 
 
+def test_pizza_de_produtos_da_mesma_categoria_mostra_a_participacao_de_cada_um():
+    # Dois produtos na mesma categoria: contar registros por categoria daria uma fatia só.
+    rows = [
+        {
+            "product": {
+                "name": nome,
+                "unit": {"symbol": "UN"},
+                "category": {"name": "Bebidas"},
+            },
+            "totalQuantity": quantidade,
+        }
+        for nome, quantidade in [("Chá Mate", 48), ("Chá de Hortelã", 12)]
+    ]
+
+    visual, _ = a.present(
+        "Faça um gráfico de pizza dos produtos", evidence(rows), demo=True
+    )
+
+    (pizza,) = visual
+    assert pizza.chart_type == "pie"
+    assert pizza.labels == ["Chá Mate", "Chá de Hortelã"]
+    assert pizza.datasets[0].data == [48, 12]
+
+
 @pytest.mark.parametrize(
     "rows",
     [
@@ -404,3 +428,57 @@ def test_artifact_schema_rejects_mismatched_columns_duplicate_labels_and_invalid
 def test_invalid_or_inexact_chart_numbers_are_not_coerced(value):
     with pytest.raises(ValueError):
         a.number(value)
+
+
+def _estoque(*itens):
+    return [
+        {
+            "product": {
+                "name": nome,
+                "unit": {"symbol": "UN"},
+                "category": {"name": categoria},
+            },
+            "totalQuantity": quantidade,
+        }
+        for nome, categoria, quantidade in itens
+    ]
+
+
+def test_pizza_dos_chas_so_mostra_os_chas_e_nao_o_estoque_inteiro():
+    rows = _estoque(
+        ("Chá Mate", "Bebidas", 48),
+        ("Chá de Camomila", "Bebidas", 40),
+        ("Chá de Hortelã", "Bebidas", 12),
+        ("Arroz", "Grãos", 85),
+        ("Feijão", "Grãos", 22),
+    )
+
+    visual, _ = a.present("faz um gráfico de pizza dos chás", evidence(rows), demo=True)
+
+    (pizza,) = visual
+    assert pizza.labels == ["Chá Mate", "Chá de Camomila", "Chá de Hortelã"]
+    assert pizza.datasets[0].data == [48, 40, 12]
+
+
+def test_tabela_filtra_pela_categoria_citada():
+    rows = _estoque(
+        ("Carne Moída", "Carnes e Aves", 18),
+        ("Peito de Frango", "Carnes e Aves", 46),
+        ("Arroz", "Grãos", 85),
+        ("Feijão", "Grãos", 22),
+    )
+
+    visual, _ = a.present("tabela das carnes", evidence(rows), demo=True)
+
+    (tabela,) = visual
+    assert [r["produto"] for r in tabela.rows] == ["Carne Moída", "Peito de Frango"]
+
+
+def test_pedido_sem_filtro_mantem_todas_as_linhas():
+    rows = _estoque(("Arroz", "Grãos", 85), ("Chá Mate", "Bebidas", 48))
+
+    visual, _ = a.present("gráfico de barras do estoque", evidence(rows), demo=True)
+
+    assert visual[0].labels == ["Arroz", "Chá Mate"]
+    # Sem pedir o mínimo, a barra é só a quantidade atual (gráfico tradicional).
+    assert len(visual[0].datasets) == 1

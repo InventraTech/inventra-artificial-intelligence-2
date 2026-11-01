@@ -2,9 +2,9 @@ import httpx
 import pytest
 from pydantic import SecretStr
 
+from iai.app.core.business.domain import Action, Query
+from iai.app.core.business.gateway import SpringGateway
 from iai.app.core.infra.security import Identity, RequestContext, authenticate
-from iai.app.core.inventra.business import SpringGateway
-from iai.app.core.inventra.domain import Action, Query
 
 
 def real_context(user="original"):

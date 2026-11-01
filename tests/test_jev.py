@@ -51,6 +51,21 @@ def test_missing_user_information_and_retry_limit():
     assert judge.policy(repair, 3).decision == "REJECT"
 
 
+def test_risco_leve_de_dado_faltando_nao_veta_quando_o_diagnostico_diz_que_nao_ha_defeito():
+    # Caso real: baixa com plano pronto; o JEV deu missing_user_information 0.33 (limite 0.30)
+    # mas o próprio diagnóstico foi repair_route=none e missing_field=not_identified.
+    leve = jev_evaluation(failed={"missing_user_information": 0.33}, route="none")
+    assert judge.policy(leve, 1).decision == "APPROVE"
+    # Risco alto continua vetando, mesmo com o diagnóstico "none".
+    alto = jev_evaluation(failed={"missing_user_information": 0.9}, route="none")
+    assert judge.policy(alto, 1).decision == "REJECT"
+    # E o diagnóstico "user_input" continua perguntando ao usuário.
+    pergunta = jev_evaluation(
+        failed={"missing_user_information": 0.9}, route="user_input"
+    )
+    assert judge.policy(pergunta, 1).decision == "ASK_USER"
+
+
 @pytest.mark.parametrize(
     "probability", [float("nan"), float("inf"), -0.1, 1.1, True, "0.9"]
 )

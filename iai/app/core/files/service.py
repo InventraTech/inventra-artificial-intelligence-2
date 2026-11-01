@@ -8,16 +8,16 @@ import hashlib
 import logging
 from dataclasses import dataclass
 
-from iai.app.core.arquivos import indice
-from iai.app.core.arquivos.descricao_imagem import descrever_imagem
-from iai.app.core.arquivos.extracao import Secao, extrair_texto
-from iai.app.core.arquivos.guardrail import verificar_conteudo
-from iai.app.core.arquivos.seguranca import (
+from iai.app.core.config import ARQUIVOS_MAX_POR_USUARIO
+from iai.app.core.files import index
+from iai.app.core.files.extraction import Secao, extrair_texto
+from iai.app.core.files.guardrail import verificar_conteudo
+from iai.app.core.files.image_description import descrever_imagem
+from iai.app.core.files.security import (
     ArquivoRecusado,
     nome_seguro,
     validar_arquivo,
 )
-from iai.app.core.config import ARQUIVOS_MAX_POR_USUARIO
 from iai.app.core.infra.privacy import remove_secrets
 from iai.app.core.infra.security import Identity
 
@@ -67,10 +67,10 @@ def ingerir_arquivo(
     try:
         arquivo = validar_arquivo(nome_original, conteudo)
         sha256 = hashlib.sha256(conteudo).hexdigest()
-        arquivo_id = indice.calcular_arquivo_id(identity, sha256)
+        arquivo_id = index.calcular_arquivo_id(identity, sha256)
         if (
-            not indice.documento_existe(identity, arquivo_id)
-            and indice.contar_documentos(identity) >= ARQUIVOS_MAX_POR_USUARIO
+            not index.documento_existe(identity, arquivo_id)
+            and index.contar_documentos(identity) >= ARQUIVOS_MAX_POR_USUARIO
         ):
             raise ArquivoRecusado(
                 "limite_usuario",
@@ -104,12 +104,12 @@ def ingerir_arquivo(
         )
         verificar_conteudo(auditado, origem=arquivo.tipo)
 
-        trechos = indice.dividir_em_trechos(secoes)
+        trechos = index.dividir_em_trechos(secoes)
         if not trechos:
             raise ArquivoRecusado(
                 "sem_texto", "Não encontrei texto legível neste arquivo."
             )
-        total = indice.indexar(
+        total = index.indexar(
             identity,
             arquivo_id=arquivo_id,
             nome=arquivo.nome,
@@ -126,7 +126,7 @@ def ingerir_arquivo(
         return ResultadoArquivo(
             nome_exibicao, "recusado", recusa.mensagem, recusa.codigo
         )
-    except indice.IndiceIndisponivel as erro:
+    except index.IndiceIndisponivel as erro:
         logger.error("arquivo_nao_indexado %s motivo=%s", rotulo_log, erro)
         return ResultadoArquivo(
             nome_exibicao,

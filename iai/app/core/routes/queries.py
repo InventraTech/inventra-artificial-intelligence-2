@@ -1,15 +1,15 @@
 from fastapi import APIRouter
 
-from iai.app.core.infra.security import Authenticated
-from iai.app.core.inventra.business import gateway
-from iai.app.core.inventra.domain import (
+from iai.app.core.business.domain import (
     PARAMETERS,
     ROLE_OPERATIONS,
     Operation,
     Query,
     ToolResult,
 )
-from iai.app.core.tools.memoria import TOOLS_MEMORIA
+from iai.app.core.business.gateway import gateway
+from iai.app.core.infra.security import Authenticated
+from iai.app.core.tools.memory import TOOLS_MEMORIA
 from iai.app.core.tools.operational import BUY_TOOLS, STOCK_TOOLS, SUPERVISOR_TOOLS
 
 router = APIRouter(prefix="/queries", tags=["consultas"])

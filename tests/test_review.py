@@ -1,4 +1,4 @@
-"""Revisão do turno pelo JEV (revisao.py): agente falso, JEV roteirizado, Mongo e regras reais."""
+"""Revisão do turno pelo JEV (review.py): agente falso, JEV roteirizado, Mongo e regras reais."""
 
 import json
 from dataclasses import replace
@@ -6,11 +6,11 @@ from dataclasses import replace
 import pytest
 from langchain_core.messages import AIMessage, HumanMessage, ToolMessage
 
-from iai.app.core.assistant import judge, revisao
+from iai.app.core.assistant import judge, review
+from iai.app.core.business.approvals import cancelar_pelo_juiz, list_proposals
+from iai.app.core.business.domain import Operation
 from iai.app.core.infra.security import current_context
 from iai.app.core.infra.storage import get_db
-from iai.app.core.inventra.approvals import cancelar_pelo_juiz, list_proposals
-from iai.app.core.inventra.domain import Operation
 from iai.app.core.tools.operational import PROPOSAL_TOOLS
 from tests_helpers import context_for, jev_evaluation, jev_fidelidade
 
@@ -125,7 +125,7 @@ def pergunta_ao_usuario():
 
 
 def revisa(agente, resposta, ent=None):
-    return revisao.revisar(
+    return review.revisar(
         "estoquista", agente, ent or entrada(), resposta, {}, FERRAMENTAS
     )
 
@@ -171,7 +171,7 @@ def test_escrita_reprovada_cancela_e_o_especialista_repete_uma_vez(monkeypatch):
     instrucao = recebido[-1].content
     assert "confirme produto, lote e fornecedor" in instrucao
     assert "Não mencione esta revisão" in instrucao
-    assert revisao.CODIGO_CANCELADA in str([m.content for m in recebido])
+    assert review.CODIGO_CANCELADA in str([m.content for m in recebido])
     assert all("Revisão interna" not in str(m.content) for m in resposta["messages"])
     assert [r["attempt"] for r in resposta["jev_calls"].values()] == [1, 2]
 
@@ -227,7 +227,7 @@ def test_reprovacao_parcial_mantem_a_aprovada_e_pergunta_sobre_a_outra(monkeypat
     assert not agente.entradas  # repetir duplicaria o que o usuário vai ver
     assert visiveis() == 1 and canceladas() == 1
     assert "quantidade e a unidade" in resposta["jev_halt"]
-    propostas = revisao.propostas_do_turno(resposta["messages"][1:])
+    propostas = review.propostas_do_turno(resposta["messages"][1:])
     assert len(propostas) == 1  # a cancelada deixou de parecer proposta
 
 
@@ -309,7 +309,7 @@ def revisa_leitura(
     agente, texto="Você tem 12 de arroz.", pergunta="quanto tenho de arroz?"
 ):
     ent = [HumanMessage(content=pergunta)]
-    return revisao.revisar(
+    return review.revisar(
         "estoquista", agente, ent, {"messages": [*ent, *leitura(texto)]}, {}, {}
     )
 
@@ -351,8 +351,8 @@ def test_leitura_reprovada_duas_vezes_termina_sem_afirmar_nada(monkeypatch):
     )
     resposta = revisa_leitura(agente, "Você tem 99 de arroz.")
     assert len(agente.entradas) == 1
-    assert resposta["jev_halt"] == revisao.FRASE_SEM_APOIO
-    assert resposta["messages"][-1].content == revisao.FRASE_SEM_APOIO
+    assert resposta["jev_halt"] == review.FRASE_SEM_APOIO
+    assert resposta["messages"][-1].content == review.FRASE_SEM_APOIO
 
 
 def test_leitura_com_jev_fora_do_ar_entrega_o_texto(monkeypatch):
@@ -370,7 +370,7 @@ def test_saudacao_sem_evidencia_nao_chama_o_jev(monkeypatch):
 
     monkeypatch.setattr(judge, "evaluate_fidelidade", proibido)
     ent = [HumanMessage(content="oi")]
-    resposta = revisao.revisar(
+    resposta = review.revisar(
         "estoquista",
         AgenteFalso(),
         ent,
@@ -389,7 +389,7 @@ def test_resposta_com_numero_e_sem_nenhuma_consulta_e_julgada(monkeypatch):
     agente = AgenteFalso(
         lambda msgs: {"messages": [*msgs, AIMessage(content="Preciso consultar.")]}
     )
-    resposta = revisao.revisar(
+    resposta = review.revisar(
         "estoquista",
         agente,
         ent,
@@ -415,7 +415,7 @@ def test_parada_do_gate_local_nao_e_julgada(monkeypatch):
 
     monkeypatch.setattr(judge, "evaluate_fidelidade", proibido)
     monkeypatch.setattr(judge, "evaluate", proibido)
-    resposta = revisao.revisar(
+    resposta = review.revisar(
         "estoquista",
         AgenteFalso(),
         entrada(),

@@ -8,7 +8,7 @@ consulte [Contexto da IAI para outras IAs](CONTEXTO_TECNICO_IA_ATUAL.md).
 
 O chat **live** valida cada tool localmente antes de executar ([gate](iai/app/core/assistant/tool_gate.py))
 e passa o turno pelo JEV depois do especialista e antes da resposta chegar ao usuário
-([revisão](iai/app/core/assistant/revisao.py)): uma chamada ao JEV por turno. Em turnos de escrita ele julga
+([revisão](iai/app/core/assistant/review.py)): uma chamada ao JEV por turno. Em turnos de escrita ele julga
 cada proposta (`propor_*`); em leituras e FAQ, o texto final contra o que as tools devolveram. Reprovada, a proposta
 é cancelada e o especialista roda de novo uma vez com os critérios que falharam. Isso não substitui a aprovação
 humana das alterações de negócio. Configure `TYPESAFE_API_KEY`; sem ela a escrita fica indisponível e a leitura segue sem o juiz.
@@ -250,14 +250,14 @@ O usuário envia arquivos e os agentes passam a consultá-los com a tool `buscar
 
 Aceitos: PDF (com texto), `.docx`, `.xlsx`, `.pptx`, `.csv`, `.txt`, `.md`, `.png`, `.jpg`, `.webp`.
 
-**Segurança (nada é gravado em disco nem executado)**, em `iai/app/core/arquivos/`:
+**Segurança (nada é gravado em disco nem executado)**, em `iai/app/core/files/`:
 
-1. `seguranca.py`: lista de permitidos por extensão; recusa executáveis/scripts (`.exe`, `.dll`, `.bat`, `.ps1`, `.js`...),
+1. `security.py`: lista de permitidos por extensão; recusa executáveis/scripts (`.exe`, `.dll`, `.bat`, `.ps1`, `.js`...),
    compactados (`.zip`, `.rar`, `.7z`...), macros (`.docm`, `.xlsm`...), HTML/SVG, Office antigo e dupla extensão
    (`fatura.exe.pdf`). Confere a **assinatura real** do conteúdo (um `.exe` renomeado para `.pdf` é barrado).
    PDF sem JavaScript/Launch/anexos/ações automáticas/senha; OOXML sem macro, objeto OLE/ActiveX, vínculo externo,
    DOCTYPE/ENTITY e zip bomb; imagem decodificada e **reencodada** (remove metadados e payloads escondidos).
-2. `extracao.py`: texto oculto (`vanish`, abas ocultas, caracteres invisíveis/tag characters) é descartado.
+2. `extraction.py`: texto oculto (`vanish`, abas ocultas, caracteres invisíveis/tag characters) é descartado.
 3. `guardrail.py`: prompt injection indireta — regras determinísticas + classificador LLM (Gemini, com Groq de reserva),
    fail-closed (erro do classificador = arquivo recusado). Senhas/chaves são mascaradas antes de qualquer envio.
    Só depois de aprovado o arquivo vai para o Qdrant.
@@ -309,7 +309,8 @@ a demonstração offline. Não publique o arquivo `.env` local.
 | IAI_BUSINESS_MODE | mock ou spring |
 | IAI_STORAGE_MODE | mock ou mongo |
 | IAI_LLM_MODE | demo ou live |
-| INVENTRA_API_URL | base Spring, localhost em HTTP ou endereço remoto HTTPS || INVENTRA_HTTP_TIMEOUT | segundos; padrão 10 |
+| INVENTRA_API_URL | base Spring, localhost em HTTP ou endereço remoto HTTPS |
+| INVENTRA_API_HTTP_HOSTS | hosts liberados para HTTP (só laboratório, ex.: `34.201.182.193`); o JWT passa sem criptografia neles || INVENTRA_HTTP_TIMEOUT | segundos; padrão 10 |
 | MONGO_CONNECTION | MongoDB; não inclua credenciais no Git |
 | GEMINI_API_KEY / GROQ_API_KEY | provedores para agentes live |
 | TYPESAFE_API_KEY | TypeSafe/JEV que julga o turno dos agentes live; sem ele ou fora do ar, a escrita é cancelada (falha fechada) e a leitura segue sem o juiz |
@@ -339,7 +340,7 @@ A página de aprovação está em outro repositório e não foi criada aqui.
 
 A branch `fix/human-in-the-loop` incorpora os commits `d9b3023` (#22) e `ae7155c` (#23).
 Mantém artefatos, confirmação do solicitante e paralelismo, adaptando o ponto de entrada
-`inventra/acoes.py` ao serviço durável de propostas. Na revisão do PR #24, foi restaurado
+`business/actions.py` ao serviço durável de propostas. Na revisão do PR #24, foi restaurado
 o JEV passou a julgar o turno depois do especialista. O FAQ usa busca determinística e, se o modelo falhar ou o JEV reprovar o texto, devolve o trecho literal da documentação. Detalhes em [CONSOLIDACAO_MAIN.md](CONSOLIDACAO_MAIN.md).
 
 ## Testes

@@ -1,7 +1,6 @@
 from fastapi import APIRouter, Query
 
-from iai.app.core.infra.security import Authenticated
-from iai.app.core.inventra.approvals import (
+from iai.app.core.business.approvals import (
     create_proposal,
     decide,
     execute_approved,
@@ -9,7 +8,8 @@ from iai.app.core.inventra.approvals import (
     list_proposals,
     public,
 )
-from iai.app.core.inventra.domain import DecisionInput, ProposalInput
+from iai.app.core.business.domain import DecisionInput, ProposalInput
+from iai.app.core.infra.security import Authenticated
 
 router = APIRouter(prefix="/approvals", tags=["aprovações"])
 

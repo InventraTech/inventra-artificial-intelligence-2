@@ -17,7 +17,7 @@ from mcp.types import ToolAnnotations
 
 from iai.app.core.infra.security import RequestContext, authenticate, current_context
 from iai.app.core.tools.faq import faq_retriever
-from iai.app.core.tools.memoria import TOOLS_MEMORIA
+from iai.app.core.tools.memory import TOOLS_MEMORIA
 from iai.app.core.tools.operational import BUY_TOOLS, STOCK_TOOLS, SUPERVISOR_TOOLS
 
 TOOLS_POR_CARGO = {

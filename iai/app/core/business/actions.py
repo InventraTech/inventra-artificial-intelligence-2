@@ -9,10 +9,10 @@ from hashlib import sha256
 
 from fastapi import HTTPException
 
+from iai.app.core.business.approvals import create_proposal, digest, snapshot
+from iai.app.core.business.domain import Action, ProposalInput
 from iai.app.core.infra.privacy import remove_secrets
 from iai.app.core.infra.security import RequestContext
-from iai.app.core.inventra.approvals import create_proposal, digest, snapshot
-from iai.app.core.inventra.domain import Action, ProposalInput
 
 __all__ = ["digest", "snapshot", "solicitar_confirmacao"]
 

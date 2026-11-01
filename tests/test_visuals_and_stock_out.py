@@ -14,20 +14,20 @@ from langchain_core.messages import AIMessage, HumanMessage
 
 from iai.app.core.assistant import artifacts as a
 from iai.app.core.assistant import graph, judge
-from iai.app.core.assistant.continuidade import (
+from iai.app.core.assistant.continuity import (
     LEMBRETE,
     SemPromessaVazia,
     eh_promessa_vazia,
 )
 from iai.app.core.assistant.tool_gate import JevToolGate
-from iai.app.core.config import business_date
-from iai.app.core.infra.security import current_context
-from iai.app.core.inventra.business import (
+from iai.app.core.business.domain import Operation, Query, ToolResult
+from iai.app.core.business.gateway import (
     MockGateway,
     consumo_por_produto,
     gateway,
 )
-from iai.app.core.inventra.domain import Operation, Query, ToolResult
+from iai.app.core.config import business_date
+from iai.app.core.infra.security import current_context
 from iai.app.core.tools.operational import (
     PROPOSAL_TOOLS,
     consultar_inventra,
@@ -206,10 +206,22 @@ def test_litros_e_mililitros_se_convertem_mas_nunca_para_quilos():
 def test_estoque_minimo_acompanha_a_conversao_da_quantidade():
     origem = fonte(linhas(("Sal", "g", 500, 1000), ("Arroz", "kg", 2, 1)))
 
-    grafico = a.build_artifact(a.PresentationChoice(kind="bar"), [origem])
+    grafico = a.build_artifact(
+        a.PresentationChoice(kind="bar"), [origem], "compare com o estoque mínimo"
+    )
 
     assert grafico.unit == "kg"
     assert [d.data for d in grafico.datasets] == [[0.5, 2], [1, 1]]
+
+
+def test_barras_so_trazem_o_minimo_quando_o_pedido_fala_em_minimo():
+    origem = fonte(linhas(("Sal", "g", 500, 1000), ("Arroz", "kg", 2, 1)))
+
+    so_quantidade = a.build_artifact(
+        a.PresentationChoice(kind="bar"), [origem], "gráfico de barras do estoque"
+    )
+
+    assert [d.data for d in so_quantidade.datasets] == [[0.5, 2]]
 
 
 def test_nota_longa_e_cortada_para_nao_derrubar_o_grafico():

@@ -9,17 +9,17 @@ from fastapi import HTTPException
 from pymongo import ReturnDocument
 from pymongo.errors import DuplicateKeyError
 
-from iai.app.core.config import BUSINESS_MODE, business_date
-from iai.app.core.infra.security import RequestContext
-from iai.app.core.infra.storage import get_db
-from iai.app.core.inventra.business import gateway
-from iai.app.core.inventra.domain import (
+from iai.app.core.business.domain import (
     ROLE_OPERATIONS,
     Action,
     DecisionInput,
     Operation,
     ProposalInput,
 )
+from iai.app.core.business.gateway import gateway
+from iai.app.core.config import BUSINESS_MODE, business_date
+from iai.app.core.infra.security import RequestContext
+from iai.app.core.infra.storage import get_db
 
 PENDING = "AGUARDANDO_APROVACAO"
 TERMINAL = {"CONCLUIDA", "RECUSADA", "FALHOU", "EXPIRADA", "RESULTADO_INCERTO"}
@@ -43,7 +43,7 @@ def public(document):
 
 def snapshot(action, ctx):
     """Valida existência e captura o alvo antes da proposta e antes de executar."""
-    from iai.app.core.inventra.domain import Query
+    from iai.app.core.business.domain import Query
 
     p = action.parameters
     targets = []

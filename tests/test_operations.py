@@ -2,9 +2,9 @@
 
 import pytest
 
+from iai.app.core.business.domain import Query
+from iai.app.core.business.gateway import MockGateway
 from iai.app.core.infra.storage import get_db
-from iai.app.core.inventra.business import MockGateway
-from iai.app.core.inventra.domain import Query
 from tests_helpers import approved, context_for
 
 
@@ -63,8 +63,8 @@ def test_restock_adjustment_and_insufficient_balance():
     )
     from fastapi import HTTPException
 
-    from iai.app.core.inventra.acoes import solicitar_confirmacao
-    from iai.app.core.inventra.domain import Action
+    from iai.app.core.business.actions import solicitar_confirmacao
+    from iai.app.core.business.domain import Action
 
     with pytest.raises(HTTPException) as denied:
         solicitar_confirmacao(

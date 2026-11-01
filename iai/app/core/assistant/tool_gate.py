@@ -5,7 +5,7 @@ também bloqueia chamadas diretas feitas durante um turno live sem esse middlewa
 REST/MCP e o demo determinístico não são turnos de agentes live.
 
 O JEV não fica aqui: ele julga o turno depois que o especialista termina e antes de a resposta
-chegar ao usuário (revisao.py). Isso é seguro porque toda escrita é uma proposta pendente: nada
+chegar ao usuário (review.py). Isso é seguro porque toda escrita é uma proposta pendente: nada
 muda no estoque até o solicitante aprovar, e uma proposta reprovada é cancelada antes de aparecer.
 """
 
@@ -31,7 +31,8 @@ from langchain_core.messages import AIMessage, ToolMessage
 from langgraph.types import Command
 from pydantic import BaseModel, Field, ValidationError
 
-from iai.app.core.assistant import eventos_do_fluxo, judge
+from iai.app.core.assistant import flow_events, judge
+from iai.app.core.business.domain import ROLE_OPERATIONS, Operation
 from iai.app.core.config import (
     GEMINI_API_KEY,
     GROQ_API_KEY,
@@ -39,7 +40,6 @@ from iai.app.core.config import (
 )
 from iai.app.core.infra.privacy import remove_secrets
 from iai.app.core.infra.security import context
-from iai.app.core.inventra.domain import ROLE_OPERATIONS, Operation
 
 logger = logging.getLogger(__name__)
 SAFE_STOP = "Não consegui confirmar os dados para concluir esse pedido. Essa etapa não foi realizada; reformule o pedido para continuar."
@@ -50,7 +50,7 @@ MOTIVOS_DE_RECUSA = {
     "arguments_grounded": "não consegui identificar com certeza o produto, fornecedor ou lote citado. Diga o nome completo (e a marca ou a unidade).",
     "business_rule_conflict": "esse pedido conflita com uma regra do Inventra.",
     "unsafe_modification": "essa alteração precisa de confirmação humana.",
-    "missing_user_information": "falta uma informação que só você sabe.",
+    "missing_user_information": "preciso confirmar algum dado com você (produto, quantidade ou lote). Diga o nome completo do produto e a quantidade.",
 }
 
 
@@ -169,9 +169,9 @@ def protect_tool(tool):
 
     @wraps(original)
     def guarded(*args, **kwargs):
+        values = {}
         if scope_var.get() is not None:
             bound = inspect.signature(original).bind(*args, **kwargs)
-            values = {}
             for key, value in bound.arguments.items():
                 if key == "config":
                     continue
@@ -191,15 +191,23 @@ def protect_tool(tool):
             ):
                 raise PermissionError("Tool sem autorização prévia válida.")
             permit["used"] = True
-        passo = eventos_do_fluxo.passo_da_tool(tool.name)
+        passo = flow_events.passo_da_tool(tool.name)
         if passo is None:
             return original(*args, **kwargs)
         etapa_id = f"{tool.name}:{uuid4().hex[:8]}"
-        eventos_do_fluxo.avisar(eventos_do_fluxo.etapa(etapa_id, "inicio", passo[0]))
+        argumentos = values or {k: v for k, v in kwargs.items() if k != "config"}
+        flow_events.avisar(
+            flow_events.etapa(
+                etapa_id,
+                "inicio",
+                passo[0],
+                detalhe=flow_events.comando(tool.name, argumentos),
+            )
+        )
         try:
             return original(*args, **kwargs)
         finally:
-            eventos_do_fluxo.avisar(eventos_do_fluxo.etapa(etapa_id, "fim", passo[1]))
+            flow_events.avisar(flow_events.etapa(etapa_id, "fim", passo[1]))
 
     guarded._iai_protected = True
     tool.func = guarded

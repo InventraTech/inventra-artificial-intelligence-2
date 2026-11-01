@@ -1,7 +1,7 @@
-"""Extrai texto de arquivos JÁ validados por `seguranca.validar_arquivo`.
+"""Extrai texto de arquivos JÁ validados por `security.validar_arquivo`.
 
 Tudo em memória, sem gravar em disco e sem executar nada. OOXML é lido com zipfile + xml.etree (o
-`seguranca` já recusou DOCTYPE/ENTITY, então não há expansão de entidades). Texto escondido em
+`security` já recusou DOCTYPE/ENTITY, então não há expansão de entidades). Texto escondido em
 documentos (runs `vanish`, caracteres invisíveis, tag characters do Unicode) é descartado, porque é o
 canal clássico de prompt injection que o humano não enxerga.
 """
@@ -15,12 +15,12 @@ from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from xml.etree import ElementTree
 
-from iai.app.core.arquivos.seguranca import (
+from iai.app.core.config import ARQUIVOS_MAX_CARACTERES
+from iai.app.core.files.security import (
     ArquivoRecusado,
     ArquivoValidado,
     decodificar_texto,
 )
-from iai.app.core.config import ARQUIVOS_MAX_CARACTERES
 
 MAX_LINHAS_PLANILHA = 20000
 MAX_COLUNAS = 60
