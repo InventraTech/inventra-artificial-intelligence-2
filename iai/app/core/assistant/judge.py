@@ -207,10 +207,20 @@ def policy(
         checks[key] = value.noul
     failed = [k for k in POSITIVE if checks[k] < threshold]
     failed += [k for k in RISKS if checks[k] > 1 - threshold + 1e-12]
-    if not failed:
-        return Decision(decision="APPROVE", checks=checks)
     route = evaluation.answers.get("repair_route")
     field = evaluation.answers.get("missing_field")
+    if (
+        "missing_user_information" in failed
+        and checks["missing_user_information"] < 0.5
+        and isinstance(route, Choice)
+        and route.choice == "none"
+        and route.probabilities.get("none", 0) >= threshold
+    ):
+        # O próprio diagnóstico do JEV diz que não há defeito a corrigir: um risco que passa por
+        # pouco do limite, contradito por ele, não veta a proposta sozinho.
+        failed.remove("missing_user_information")
+    if not failed:
+        return Decision(decision="APPROVE", checks=checks)
     if not isinstance(route, Choice) or not isinstance(field, Choice):
         raise JevUnavailable("JEV_INVALID_DIAGNOSIS")
     confident = route.probabilities.get(route.choice, 0) >= threshold
