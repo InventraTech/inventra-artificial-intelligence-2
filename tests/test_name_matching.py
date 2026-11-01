@@ -7,10 +7,10 @@ import pytest
 from pydantic import SecretStr
 from spring_fake import KITCHEN, USER_ID, FakeSpring
 
+from iai.app.core.business.domain import ToolResult
+from iai.app.core.business.gateway import MockGateway, SpringGateway
 from iai.app.core.infra.retrieval import nome_confere, termos_de_busca_alternativos
 from iai.app.core.infra.security import Identity, RequestContext, current_context
-from iai.app.core.inventra.business import MockGateway, SpringGateway
-from iai.app.core.inventra.domain import ToolResult
 from iai.app.core.tools.operational import consultar_inventra, planejar_baixa
 from tests_helpers import context_for
 
@@ -230,8 +230,8 @@ def test_baixa_com_busca_de_uma_letra_nao_chuta_produto(cozinha):
 # ------------------------------------------------- gateway real (Spring de mentira)
 @pytest.fixture
 def spring(monkeypatch):
+    from iai.app.core.business import approvals  # noqa: F401  (mesmo patch dos e2e)
     from iai.app.core.config import business_date
-    from iai.app.core.inventra import approvals  # noqa: F401  (mesmo patch dos e2e)
     from iai.app.core.tools import operational
 
     fake = FakeSpring(today=business_date())

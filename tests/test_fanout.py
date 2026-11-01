@@ -167,8 +167,8 @@ def test_partial_source_failure_preserves_the_successful_read(essential_fails):
 
 
 def test_mixed_proposal_batch_is_sequenced_before_any_mutation(monkeypatch):
+    from iai.app.core.business.domain import Operation
     from iai.app.core.infra.storage import get_db
-    from iai.app.core.inventra.domain import Operation
     from iai.app.core.tools.operational import PROPOSAL_TOOLS, consultar_inventra
 
     def evaluate(state):

@@ -9,9 +9,9 @@ from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, Field, ValidationError
 
+from iai.app.core.business.domain import ToolResult
 from iai.app.core.infra.privacy import remove_secrets
 from iai.app.core.infra.retrieval import normalize
-from iai.app.core.inventra.domain import ToolResult
 from iai.app.core.schemas import ChartArtifact, ChartDataset, TableArtifact, TableColumn
 
 SALES_MESSAGE = (
@@ -219,9 +219,9 @@ def fallback_sources(question):
     O modelo às vezes recusa ("não consigo gerar gráficos") ou não consulta nada. O
     desenho é montado pelo backend sobre dados confirmados, então a leitura também é.
     """
+    from iai.app.core.business.domain import Query
+    from iai.app.core.business.gateway import gateway
     from iai.app.core.infra.security import context
-    from iai.app.core.inventra.business import gateway
-    from iai.app.core.inventra.domain import Query
 
     resource = resource_for(question)
     try:

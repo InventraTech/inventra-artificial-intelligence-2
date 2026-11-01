@@ -10,9 +10,9 @@ from langchain_core.messages import AIMessage
 
 from iai.app.core.assistant import graph, judge
 from iai.app.core.assistant.tool_gate import JevToolGate
+from iai.app.core.business.domain import Operation
 from iai.app.core.infra.security import current_context
 from iai.app.core.infra.storage import get_db
-from iai.app.core.inventra.domain import Operation
 from iai.app.core.tools.operational import PROPOSAL_TOOLS, consultar_inventra
 from tests_helpers import context_for, jev_evaluation, jev_fidelidade
 

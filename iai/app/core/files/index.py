@@ -21,7 +21,6 @@ from typing import Any, Protocol
 
 from qdrant_client import QdrantClient, models
 
-from iai.app.core.arquivos.extracao import Secao
 from iai.app.core.assistant.guardrail import normalizar_texto
 from iai.app.core.config import (
     EMBEDDING_DIM,
@@ -32,6 +31,7 @@ from iai.app.core.config import (
     QDRANT_COLLECTION,
     QDRANT_URL,
 )
+from iai.app.core.files.extraction import Secao
 from iai.app.core.infra.security import Identity
 
 logger = logging.getLogger("iai.arquivos")

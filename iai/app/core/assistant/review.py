@@ -33,9 +33,9 @@ from iai.app.core.assistant.tool_gate import (
     mensagem_de_recusa,
     sanitized,
 )
+from iai.app.core.business.approvals import cancelar_pelo_juiz
 from iai.app.core.config import business_date
 from iai.app.core.infra.security import context, current_context
-from iai.app.core.inventra.approvals import cancelar_pelo_juiz
 
 logger = logging.getLogger(__name__)
 

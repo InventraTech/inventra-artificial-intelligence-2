@@ -8,11 +8,11 @@ from langchain_core.tools import tool
 
 from iai.app.core.assistant import judge
 from iai.app.core.assistant.tool_gate import JevToolGate, live_tool_scope, protect_tool
+from iai.app.core.business.domain import Operation
 from iai.app.core.infra.security import current_context
 from iai.app.core.infra.storage import get_db
-from iai.app.core.inventra.domain import Operation
 from iai.app.core.tools.faq import faq_retriever
-from iai.app.core.tools.memoria import buscar_historico
+from iai.app.core.tools.memory import buscar_historico
 from iai.app.core.tools.operational import PROPOSAL_TOOLS
 from tests_helpers import context_for
 
@@ -65,7 +65,7 @@ def make_agent(responses, tools, name="estoquista"):
 
 @pytest.fixture(autouse=True)
 def sem_jev(monkeypatch):
-    """O gate valida localmente; o JEV só entra depois do especialista (revisao.py)."""
+    """O gate valida localmente; o JEV só entra depois do especialista (review.py)."""
 
     def proibido(*args, **kwargs):
         pytest.fail("O gate não deve chamar o JEV.")

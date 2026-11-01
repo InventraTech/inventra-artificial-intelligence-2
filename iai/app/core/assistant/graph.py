@@ -20,8 +20,8 @@ from langchain_core.runnables import RunnableConfig
 from langgraph.graph import END, StateGraph
 from langgraph.prebuilt import ToolNode
 
-from iai.app.core.assistant import eventos_do_fluxo
-from iai.app.core.assistant.continuidade import SemPromessaVazia
+from iai.app.core.assistant import flow_events
+from iai.app.core.assistant.continuity import SemPromessaVazia
 from iai.app.core.assistant.guardrail import (
     anonimizar_entrada,
     guardrail_escopo,
@@ -44,20 +44,20 @@ from iai.app.core.assistant.prompts import (
     com_contexto_temporal,
     contexto_temporal,
 )
-from iai.app.core.assistant.respostas import (
+from iai.app.core.assistant.responses import (
     mensagem_de_falha,
     resposta_de_propostas,
     resumo_para_log,
 )
-from iai.app.core.assistant.revisao import CODIGO_CANCELADA, revisar, revisar_faq
+from iai.app.core.assistant.review import CODIGO_CANCELADA, revisar, revisar_faq
 from iai.app.core.assistant.tool_gate import GateState, JevToolGate, live_tool_scope
 from iai.app.core.config import BUSINESS_MODE, LLM_MODE
 from iai.app.core.infra.metrics import ColetorMetricas, registrar_requisicao
 from iai.app.core.infra.security import context
 from iai.app.core.schemas import ChatResponse, Estado, PendingAction
-from iai.app.core.tools.documentos import TOOLS_DOCUMENTOS
+from iai.app.core.tools.documents import TOOLS_DOCUMENTOS
 from iai.app.core.tools.faq import BASE_INDISPONIVEL, SEM_RESULTADO, faq_retriever
-from iai.app.core.tools.memoria import TOOLS_MEMORIA
+from iai.app.core.tools.memory import TOOLS_MEMORIA
 from iai.app.core.tools.operational import BUY_TOOLS, STOCK_TOOLS, SUPERVISOR_TOOLS
 
 logger = logging.getLogger(__name__)
@@ -541,7 +541,7 @@ def especialista_node(nome):
         }[nome]
         entrada = list(estado["messages"])
         resposta = agente.invoke({"messages": entrada}, config=config)
-        # O JEV julga depois do especialista e antes do usuário (revisao.py).
+        # O JEV julga depois do especialista e antes do usuário (review.py).
         resposta = revisar(
             nome, agente, entrada, resposta, config, FERRAMENTAS_DO_AGENTE[nome]
         )
@@ -862,13 +862,13 @@ def executar_fluxo_chat_stream(
                         if not ns:  # o estado do grafo principal; subgrafos não contam
                             output = parte
                         continue
-                    evento = eventos_do_fluxo.traduzir(ns, modo, parte)
+                    evento = flow_events.traduzir(ns, modo, parte)
                     if evento:
                         yield evento
         resposta = _montar_resposta(
             output, pergunta_usuario, session_id, user_id, k, coletor
         )
-        yield from eventos_do_fluxo.eventos_finais(
+        yield from flow_events.eventos_finais(
             resposta, interrompida=bool(output.get("jev_halt")), cancelado=cancelado
         )
     except ClienteDesistiu:

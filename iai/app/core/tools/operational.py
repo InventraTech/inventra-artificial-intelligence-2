@@ -9,17 +9,13 @@ from pydantic import Field, ValidationError, create_model, model_validator
 from pymongo.errors import PyMongoError
 
 from iai.app.core.assistant.tool_gate import protect_tool
-from iai.app.core.config import STORAGE_MODE, business_date
-from iai.app.core.infra.retrieval import normalize
-from iai.app.core.infra.security import context
-from iai.app.core.inventra.acoes import solicitar_confirmacao
-from iai.app.core.inventra.approvals import (
+from iai.app.core.business.actions import solicitar_confirmacao
+from iai.app.core.business.approvals import (
     get_proposal,
     list_proposals,
     public,
 )
-from iai.app.core.inventra.business import gateway
-from iai.app.core.inventra.domain import (
+from iai.app.core.business.domain import (
     BUY_OPERATIONS,
     PARAMETERS,
     STOCK_OPERATIONS,
@@ -31,6 +27,10 @@ from iai.app.core.inventra.domain import (
     StrictModel,
     ToolResult,
 )
+from iai.app.core.business.gateway import gateway
+from iai.app.core.config import STORAGE_MODE, business_date
+from iai.app.core.infra.retrieval import normalize
+from iai.app.core.infra.security import context
 
 
 @tool(args_schema=Query)

@@ -1,4 +1,4 @@
-from iai.app.core.assistant.respostas import (
+from iai.app.core.assistant.responses import (
     descrever_proposta,
     mensagem_de_falha,
     resposta_de_propostas,

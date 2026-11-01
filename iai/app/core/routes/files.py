@@ -5,9 +5,9 @@ from typing import Annotated
 from fastapi import APIRouter, File, Form, HTTPException, Path, Request, UploadFile
 from pydantic import BaseModel
 
-from iai.app.core.arquivos import indice
-from iai.app.core.arquivos.servico import ingerir_arquivo
 from iai.app.core.config import ARQUIVOS_MAX_BYTES, ARQUIVOS_MAX_POR_ENVIO
+from iai.app.core.files import index
+from iai.app.core.files.service import ingerir_arquivo
 from iai.app.core.infra.security import Authenticated
 
 router = APIRouter(tags=["arquivos"])
@@ -48,7 +48,7 @@ class ListaDocumentosResponse(BaseModel):
 
 
 def _exigir_indice() -> None:
-    if not indice.configurado():
+    if not index.configurado():
         raise HTTPException(
             503, "Recurso de documentos indisponível: Qdrant não configurado."
         )
@@ -102,8 +102,8 @@ def enviar_arquivos(
 def listar_arquivos(ctx: Authenticated) -> ListaDocumentosResponse:
     _exigir_indice()
     try:
-        documentos = indice.listar(ctx.identity)
-    except indice.IndiceIndisponivel:
+        documentos = index.listar(ctx.identity)
+    except index.IndiceIndisponivel:
         raise HTTPException(503, "Não consegui listar os documentos agora.") from None
     return ListaDocumentosResponse(
         documentos=[DocumentoResponse(**d.__dict__) for d in documentos]
@@ -117,8 +117,8 @@ def remover_arquivo(
 ) -> None:
     _exigir_indice()
     try:
-        removido = indice.remover(ctx.identity, arquivo_id)
-    except indice.IndiceIndisponivel:
+        removido = index.remover(ctx.identity, arquivo_id)
+    except index.IndiceIndisponivel:
         raise HTTPException(503, "Não consegui remover o documento agora.") from None
     if not removido:
         raise HTTPException(404, "Documento não encontrado.")

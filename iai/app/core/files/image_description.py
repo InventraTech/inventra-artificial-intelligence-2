@@ -12,8 +12,8 @@ from concurrent.futures import TimeoutError as FuturoExpirou
 from langchain_core.messages import HumanMessage, SystemMessage
 from pydantic import BaseModel, Field
 
-from iai.app.core.arquivos.seguranca import ArquivoRecusado, ArquivoValidado
 from iai.app.core.config import LLM_MODE
+from iai.app.core.files.security import ArquivoRecusado, ArquivoValidado
 
 logger = logging.getLogger("iai.arquivos")
 
@@ -71,7 +71,7 @@ def _chamar_modelo(conteudo: bytes, mime: str) -> DescricaoImagem:
 
 
 def descrever_imagem(arquivo: ArquivoValidado) -> str:
-    """Texto descritivo da imagem (já reencodada por `seguranca`). Recusa se a imagem tentar dar ordens."""
+    """Texto descritivo da imagem (já reencodada por `security`). Recusa se a imagem tentar dar ordens."""
     if LLM_MODE == "demo":
         return f"Imagem {arquivo.nome} (modo demonstração: descrição automática desativada)."
     pool = ThreadPoolExecutor(max_workers=1)

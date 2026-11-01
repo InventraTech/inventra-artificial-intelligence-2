@@ -3,9 +3,9 @@ from typing import Literal
 from langchain_core.runnables import RunnableConfig
 from langchain_core.tools import tool
 
-from iai.app.core.arquivos import indice
-from iai.app.core.arquivos.guardrail import varredura_deterministica
 from iai.app.core.assistant.tool_gate import protect_tool
+from iai.app.core.files import index
+from iai.app.core.files.guardrail import varredura_deterministica
 from iai.app.core.infra.security import context
 
 SEM_CONFIG = "O recurso de documentos não está configurado neste ambiente."
@@ -30,11 +30,11 @@ def buscar_documentos(
     """Busca nos documentos que o usuário enviou (PDF, Word, Excel, PowerPoint, CSV, texto, imagens
     descritas) os trechos mais relevantes para a consulta. Use quando o usuário se referir a um arquivo,
     contrato, planilha, nota, foto ou documento dele. `tipo` é opcional e restringe o formato."""
-    if not indice.configurado():
+    if not index.configurado():
         return SEM_CONFIG
     try:
-        achados = indice.buscar(context().identity, consulta, limite=5, tipo=tipo)
-    except indice.IndiceIndisponivel:
+        achados = index.buscar(context().identity, consulta, limite=5, tipo=tipo)
+    except index.IndiceIndisponivel:
         return "Não consegui consultar os documentos agora."
     # Defesa em profundidade: trecho que pareça ordem para IA nunca chega ao modelo.
     achados = [a for a in achados if not varredura_deterministica(a.texto)]

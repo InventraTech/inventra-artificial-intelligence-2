@@ -11,14 +11,14 @@ from langgraph.graph import END, StateGraph
 from langgraph.prebuilt import ToolNode
 
 from iai.app.core.assistant.guardrail import verificar
+from iai.app.core.business.domain import Operation, Query
+from iai.app.core.business.gateway import gateway
 from iai.app.core.infra.retrieval import normalize
 from iai.app.core.infra.security import context
-from iai.app.core.inventra.business import gateway
-from iai.app.core.inventra.domain import Operation, Query
 from iai.app.core.schemas import Estado
-from iai.app.core.tools.documentos import buscar_documentos
+from iai.app.core.tools.documents import buscar_documentos
 from iai.app.core.tools.faq import faq_retriever
-from iai.app.core.tools.memoria import buscar_historico
+from iai.app.core.tools.memory import buscar_historico
 from iai.app.core.tools.operational import PROPOSAL_TOOLS, consultar_inventra
 
 

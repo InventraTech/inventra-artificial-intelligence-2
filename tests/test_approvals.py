@@ -7,17 +7,17 @@ import pytest
 from fastapi import HTTPException
 from pydantic import SecretStr, ValidationError
 
-from iai.app.core.infra.security import DEMO_IDENTITIES, RequestContext
-from iai.app.core.infra.storage import get_db
-from iai.app.core.inventra import approvals
-from iai.app.core.inventra.business import MockGateway
-from iai.app.core.inventra.domain import (
+from iai.app.core.business import approvals
+from iai.app.core.business.domain import (
     Action,
     DecisionInput,
     Operation,
     ProposalInput,
     Query,
 )
+from iai.app.core.business.gateway import MockGateway
+from iai.app.core.infra.security import DEMO_IDENTITIES, RequestContext
+from iai.app.core.infra.storage import get_db
 
 
 def ctx(token="demo-estoquista"):
@@ -339,7 +339,7 @@ def test_same_role_other_requester_is_denied():
 def test_approved_action_survives_dependency_outage_and_revalidates_before_retry(
     monkeypatch,
 ):
-    from iai.app.core.inventra.business import result
+    from iai.app.core.business.gateway import result
 
     p = proposal()
     original = MockGateway()

@@ -11,16 +11,16 @@ import httpx
 import pytest
 from pydantic import SecretStr
 
-from iai.app.core.config import business_date
-from iai.app.core.infra.security import Identity, RequestContext, current_context
-from iai.app.core.inventra import approvals
-from iai.app.core.inventra.business import SpringGateway
-from iai.app.core.inventra.domain import (
+from iai.app.core.business import approvals
+from iai.app.core.business.domain import (
     Action,
     DecisionInput,
     ProposalInput,
     Query,
 )
+from iai.app.core.business.gateway import SpringGateway
+from iai.app.core.config import business_date
+from iai.app.core.infra.security import Identity, RequestContext, current_context
 from iai.app.core.tools import operational
 from tests.spring_fake import KITCHEN, USER_ID, FakeSpring
 
@@ -289,7 +289,7 @@ def test_baixa_em_lote_vencido_nem_vira_cartao_e_nao_muda_o_banco(spring):
 
 # -------------------------------------------------------- consumo real (movimentações)
 def test_consumo_usa_as_baixas_reais_do_historico(spring):
-    from iai.app.core.inventra.business import CONSUMO_REAL
+    from iai.app.core.business.gateway import CONSUMO_REAL
 
     concluir("registrar_saida", {"batchId": 2, "quantity": "3"})
     concluir("registrar_saida", {"batchId": 3, "quantity": "2"})

@@ -14,20 +14,20 @@ from langchain_core.messages import AIMessage, HumanMessage
 
 from iai.app.core.assistant import artifacts as a
 from iai.app.core.assistant import graph, judge
-from iai.app.core.assistant.continuidade import (
+from iai.app.core.assistant.continuity import (
     LEMBRETE,
     SemPromessaVazia,
     eh_promessa_vazia,
 )
 from iai.app.core.assistant.tool_gate import JevToolGate
-from iai.app.core.config import business_date
-from iai.app.core.infra.security import current_context
-from iai.app.core.inventra.business import (
+from iai.app.core.business.domain import Operation, Query, ToolResult
+from iai.app.core.business.gateway import (
     MockGateway,
     consumo_por_produto,
     gateway,
 )
-from iai.app.core.inventra.domain import Operation, Query, ToolResult
+from iai.app.core.config import business_date
+from iai.app.core.infra.security import current_context
 from iai.app.core.tools.operational import (
     PROPOSAL_TOOLS,
     consultar_inventra,

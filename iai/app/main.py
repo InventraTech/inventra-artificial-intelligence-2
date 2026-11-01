@@ -7,6 +7,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from pymongo.errors import PyMongoError
 
+from iai.app.core.business.approvals import expire_pending
 from iai.app.core.config import (
     AUTH_MODE,
     BUSINESS_MODE,
@@ -15,8 +16,7 @@ from iai.app.core.config import (
     STORAGE_MODE,
 )
 from iai.app.core.infra.storage import get_db, initialize_storage
-from iai.app.core.inventra.approvals import expire_pending
-from iai.app.core.routes import approvals, arquivos, chat, metrics, queries
+from iai.app.core.routes import approvals, chat, files, metrics, queries
 
 # Sem isso o Python só mostra WARNING+: as decisões do JEV (INFO) nunca chegavam aos logs do Render.
 logging.basicConfig(level=logging.INFO, format="%(levelname)s:%(name)s: %(message)s")
@@ -66,7 +66,7 @@ if CORS_ORIGINS:
     )
 app.include_router(chat.router)
 app.include_router(approvals.router)
-app.include_router(arquivos.router)
+app.include_router(files.router)
 app.include_router(queries.router)
 app.include_router(metrics.router)
 
