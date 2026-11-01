@@ -104,6 +104,13 @@ STORAGE_MODE = os.getenv("IAI_STORAGE_MODE", "mongo")
 LLM_MODE = os.getenv("IAI_LLM_MODE", "live")
 API_URL = os.getenv("INVENTRA_API_URL", "http://localhost:8080").rstrip("/")
 HTTP_TIMEOUT = float(os.getenv("INVENTRA_HTTP_TIMEOUT", "10"))
+# Hosts em que a API Spring pode ser chamada por HTTP (ex.: EC2 sem certificado, só em laboratório).
+# O JWT passa sem criptografia nesses hosts: qualquer outro host remoto continua exigindo HTTPS.
+API_HTTP_HOSTS = {
+    host.strip().lower()
+    for host in os.getenv("INVENTRA_API_HTTP_HOSTS", "").split(",")
+    if host.strip()
+}
 
 for nome, modo, permitidos in (
     ("auth", AUTH_MODE, {"mock", "spring"}),
@@ -130,10 +137,13 @@ if (
 # Service do Kubernetes (ex.: inventra-api.inventra.svc.cluster.local): tráfego interno ao cluster.
 if (
     api_address.scheme != "https"
-    and api_address.hostname not in {"localhost", "127.0.0.1", "::1"}
+    and api_address.hostname not in {"localhost", "127.0.0.1", "::1", *API_HTTP_HOSTS}
     and not api_address.hostname.endswith(".svc.cluster.local")
 ):
-    raise ValueError("JWT exige HTTPS fora de localhost e do cluster.")
+    raise ValueError(
+        "JWT exige HTTPS fora de localhost e do cluster. Para liberar HTTP em um host de "
+        "laboratório, liste-o em INVENTRA_API_HTTP_HOSTS."
+    )
 
 
 def business_date():
