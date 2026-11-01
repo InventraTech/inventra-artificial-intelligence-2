@@ -298,7 +298,8 @@ class Query(StrictModel):
     status: str | None = Field(default=None, max_length=40)
     days: int = Field(default=7, ge=0, le=365)
     page: int = Field(default=0, ge=0, le=10000)
-    size: int = Field(default=20, ge=1, le=100)
+    # Os dados já vêm inteiros da API: 20 por padrão cortava o estoque de 57 produtos em 20.
+    size: int = Field(default=100, ge=1, le=100)
     unread: bool = False
     mine: bool = Field(
         default=False,

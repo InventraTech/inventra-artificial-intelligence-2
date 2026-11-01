@@ -82,6 +82,58 @@ def unsupported_kitchens(question):
     )
 
 
+# Palavras que descrevem o formato ou o pedido, não o que filtrar (chás, carnes, leite...).
+GENERICAS = {
+    "grafico", "graficos", "pizza", "barra", "barras", "tabela", "tabelas", "estoque",
+    "produto", "produtos", "quantidade", "quantidades", "atual", "atuais", "tudo", "todo",
+    "todos", "todas", "quais", "qual", "quanto", "quantos", "mostre", "mostra", "mostrar",
+    "faca", "faz", "fazer", "monte", "gere", "dos", "das", "que", "tem", "temos", "tenho",
+    "para", "com", "por", "minimo", "maximo", "compare", "comparar", "vence", "vencem",
+    "vencer", "vencimento", "validade", "proximo", "proximos", "dias", "lote", "lotes",
+    "item", "itens", "cozinha", "uma", "uns", "umas", "entre", "sobre", "meu", "minha",
+    "esse", "essa", "isso", "ver", "quero", "preciso", "abaixo", "mais", "menos",
+}  # fmt: skip
+
+
+def _singular(palavra: str) -> str:
+    return palavra[:-1] if len(palavra) > 3 and palavra.endswith("s") else palavra
+
+
+def restringir_fonte(source, question):
+    """Só as linhas de que o pedido fala ("chás", "carnes", "leite"), quando ele fala de algumas.
+
+    Palavra do pedido que aparece no início de uma palavra do produto/categoria/fornecedor filtra;
+    palavra que casa com todas as linhas, ou com nenhuma, não filtra. Menos de 2 linhas restantes
+    não formam tabela nem gráfico: então a fonte inteira é mantida.
+    """
+    palavras = {_singular(t) for t in normalize(question).split() if len(t) >= 3}
+    palavras -= {_singular(g) for g in GENERICAS}
+    rows = source["rows"]
+    escolhidas: set[int] = set()
+    for palavra in palavras:
+        padrao = re.compile(r"\b" + re.escape(palavra))
+        achadas = {
+            i
+            for i, row in enumerate(rows)
+            if any(
+                padrao.search(normalize(str(row.get(campo, ""))))
+                for campo in ("produto", "categoria", "fornecedor")
+            )
+        }
+        if 0 < len(achadas) < len(rows):
+            escolhidas |= achadas
+    if len(escolhidas) < 2:
+        return source
+    return {**source, "rows": [rows[i] for i in sorted(escolhidas)]}
+
+
+def quer_minimo(question) -> bool:
+    """Só compara com o estoque mínimo quando o pedido fala em mínimo, comparação ou reposição."""
+    return bool(
+        re.search(r"minim|compar|limite|reposi|abaixo|falt", normalize(question))
+    )
+
+
 def visual_requested(question) -> bool:
     """O usuário pediu explicitamente gráfico, barras, pizza ou tabela."""
     text = normalize(question)
@@ -434,7 +486,7 @@ def unique_category(rows):
     )
 
 
-def build_artifact(choice, sources):
+def build_artifact(choice, sources, question=""):
     if choice.kind == "none" or choice.source_id >= len(sources):
         return None
     source = sources[choice.source_id]
@@ -475,19 +527,20 @@ def build_artifact(choice, sources):
         group = next((k for k in ("status", "categoria") if k in columns), None)
         if group and not ranking:
             counts = Counter(r[group] for r in rows)
-            if len(counts) < 2:
-                return None
-            return ChartArtifact(
-                chart_type="pie",
-                labels=list(counts),
-                datasets=[
-                    ChartDataset(
-                        label="Quantidade de registros", data=list(counts.values())
-                    )
-                ],
-                unit="registros",
-                **metadata,
-            )
+            if len(counts) >= 2:
+                return ChartArtifact(
+                    chart_type="pie",
+                    labels=list(counts),
+                    datasets=[
+                        ChartDataset(
+                            label="Quantidade de registros", data=list(counts.values())
+                        )
+                    ],
+                    unit="registros",
+                    **metadata,
+                )
+            # Tudo na mesma categoria/status: contar registros daria uma fatia só. A pizza passa
+            # a mostrar a participação de cada produto, logo abaixo.
         # Pizza de participação: fatia de cada produto no total, na mesma unidade.
         value_key = "consumo" if ranking else "quantidade"
         picked = dominant_unit(rows, value_key)
@@ -537,7 +590,7 @@ def build_artifact(choice, sources):
     if not category:
         return None
     series = [value_key]
-    if not ranking and "minimo" in columns:
+    if not ranking and "minimo" in columns and quer_minimo(question):
         series.append("minimo")
     return ChartArtifact(
         chart_type="bar",
@@ -593,20 +646,21 @@ def present(
             else None,
         )
     prefix = ""
+    sources = [restringir_fonte(s, question) for s in sources]
     try:
         choice = choose_presentation(question, sources, demo=demo, config=config)
-        artifact = build_artifact(choice, sources)
+        artifact = build_artifact(choice, sources, question)
         if artifact is None and can_fetch and not fetched:
             more = fallback_sources(question)
             if more:
-                sources = more
+                sources = [restringir_fonte(s, question) for s in more]
                 choice = choose_presentation(
                     question, sources, demo=demo, config=config
                 )
-                artifact = build_artifact(choice, sources)
+                artifact = build_artifact(choice, sources, question)
         if artifact is None and can_fetch and choice.kind in {"bar", "pie"}:
             table = PresentationChoice(kind="table", source_id=choice.source_id)
-            artifact = build_artifact(table, sources)
+            artifact = build_artifact(table, sources, question)
             if artifact is not None:
                 prefix = "Não deu para montar o gráfico com esses dados, então mostrei uma tabela. "
     except Exception:  # noqa: BLE001 - apresentação opcional não invalida uma consulta

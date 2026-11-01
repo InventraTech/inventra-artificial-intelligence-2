@@ -206,10 +206,22 @@ def test_litros_e_mililitros_se_convertem_mas_nunca_para_quilos():
 def test_estoque_minimo_acompanha_a_conversao_da_quantidade():
     origem = fonte(linhas(("Sal", "g", 500, 1000), ("Arroz", "kg", 2, 1)))
 
-    grafico = a.build_artifact(a.PresentationChoice(kind="bar"), [origem])
+    grafico = a.build_artifact(
+        a.PresentationChoice(kind="bar"), [origem], "compare com o estoque mínimo"
+    )
 
     assert grafico.unit == "kg"
     assert [d.data for d in grafico.datasets] == [[0.5, 2], [1, 1]]
+
+
+def test_barras_so_trazem_o_minimo_quando_o_pedido_fala_em_minimo():
+    origem = fonte(linhas(("Sal", "g", 500, 1000), ("Arroz", "kg", 2, 1)))
+
+    so_quantidade = a.build_artifact(
+        a.PresentationChoice(kind="bar"), [origem], "gráfico de barras do estoque"
+    )
+
+    assert [d.data for d in so_quantidade.datasets] == [[0.5, 2]]
 
 
 def test_nota_longa_e_cortada_para_nao_derrubar_o_grafico():
