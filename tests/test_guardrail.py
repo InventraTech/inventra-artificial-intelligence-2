@@ -95,15 +95,61 @@ def test_guardrail_insulto_aprova_quando_modelo_libera(monkeypatch):
     assert resultado == {"bloqueado": False, "motivo": "aprovado", "mensagem": ""}
 
 
-def test_guardrail_insulto_falha_segura_quando_modelo_da_erro(monkeypatch):
-    monkeypatch.setattr(
-        guardrail_module,
-        "llm_guardrail",
-        _LlmFalso(erro=RuntimeError("falha simulada de API")),
-    )
+def test_guardrail_insulto_falha_segura_quando_nenhum_modelo_responde(monkeypatch):
+    for nome in ("llm_guardrail", "llm_rapido"):
+        monkeypatch.setattr(
+            guardrail_module,
+            nome,
+            _LlmFalso(erro=RuntimeError("falha simulada de API")),
+        )
     resultado = guardrail_insulto("quantos tomates temos em estoque?")
     assert resultado["bloqueado"] is True
     assert resultado["motivo"] == "erro_api_safeguard"
+    assert "Erro interno" not in resultado["mensagem"]
+
+
+def test_guardrail_insulto_usa_o_modelo_reserva_quando_o_de_seguranca_estoura_o_limite(
+    monkeypatch,
+):
+    # Caso real: 413 "Request too large" (2.000 tokens por minuto) no gpt-oss-safeguard-20b.
+    monkeypatch.setattr(
+        guardrail_module,
+        "llm_guardrail",
+        _LlmFalso(erro=RuntimeError("Error code: 413 - Request too large")),
+    )
+    monkeypatch.setattr(
+        guardrail_module,
+        "llm_rapido",
+        _LlmFalso(
+            resultado=ResultadoGuardrail(bloqueado=False, motivo="ok", mensagem="")
+        ),
+    )
+
+    resultado = guardrail_insulto("oi")
+
+    assert resultado == {"bloqueado": False, "motivo": "aprovado", "mensagem": ""}
+
+
+def test_guardrail_insulto_com_reserva_ainda_bloqueia_o_que_o_modelo_reserva_bloqueia(
+    monkeypatch,
+):
+    monkeypatch.setattr(
+        guardrail_module, "llm_guardrail", _LlmFalso(erro=RuntimeError("413"))
+    )
+    monkeypatch.setattr(
+        guardrail_module,
+        "llm_rapido",
+        _LlmFalso(
+            resultado=ResultadoGuardrail(
+                bloqueado=True, motivo="insulto", mensagem="Sem ofensas."
+            )
+        ),
+    )
+
+    resultado = guardrail_insulto("mensagem ofensiva")
+
+    assert resultado["bloqueado"] is True
+    assert resultado["motivo"] == "insulto"
 
 
 def test_filtro_hardcoded_pega_variacao_sem_acento():

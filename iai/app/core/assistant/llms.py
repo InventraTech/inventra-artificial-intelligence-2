@@ -33,10 +33,15 @@ llm_rapido = ChatGroq(
     stop_sequences=None,
 )
 
+# A Groq (plano on_demand) limita este modelo a 2.000 tokens por minuto e confere o tamanho do pedido
+# contra o máximo de resposta. Sem max_tokens o pedido passava de 2.400 e falhava com 413 de vez em
+# quando; a classificação cabe em poucas centenas.
 llm_guardrail = ChatGroq(
     model="openai/gpt-oss-safeguard-20b",
     temperature=0.0,
     api_key=chave_ou_aviso(GROQ_API_KEY),
+    max_tokens=300,
+    reasoning_effort="low",
 )
 
 llm_especialista = llm_gemini_pensante.with_fallbacks([llm_rapido])

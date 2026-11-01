@@ -1,3 +1,4 @@
+import logging
 import re
 import unicodedata
 
@@ -8,8 +9,14 @@ from iai.app.core.assistant.prompts import (
     GUARDRAIL_ENTRADA_SYSTEM_PROMPT,
     GUARDRAIL_INSULTO_SYSTEM_PROMPT,
 )
+from iai.app.core.assistant.responses import resumo_para_log
 from iai.app.core.infra.privacy import SECRET_PATTERN, remove_secrets
 from iai.app.core.schemas import ResultadoGuardrail
+
+logger = logging.getLogger(__name__)
+
+# Mensagem quando nenhum modelo de verificação respondeu: o usuário sabe que é do sistema, não dele.
+MENSAGEM_VERIFICACAO_INDISPONIVEL = "A verificação de segurança está sobrecarregada agora. Tente de novo em alguns segundos."
 
 TERMOS_PROIBIDOS = [
     r"ignor[ae]\s+(todas\s+)?(as\s+)?instrucoes",
@@ -85,24 +92,37 @@ def anonimizar_entrada(texto: str) -> tuple[str, dict]:
     return texto_anonimizado, mapa_pii
 
 
+def _classificar(prompt_do_sistema: str, mensagem: str, modelos) -> ResultadoGuardrail:
+    """Tenta cada modelo na ordem: o primeiro que responder decide. Se todos falharem, repassa o último erro."""
+    prompt = ChatPromptTemplate.from_messages(
+        [("system", prompt_do_sistema), ("human", "{mensagem}")]
+    )
+    ultimo_erro: Exception | None = None
+    for modelo in modelos:
+        try:
+            res = (prompt | modelo.with_structured_output(ResultadoGuardrail)).invoke(
+                {"mensagem": mensagem}
+            )
+            assert isinstance(res, ResultadoGuardrail)
+            return res
+        except Exception as exc:  # noqa: BLE001 - tenta o próximo modelo; o último erro sobe
+            logger.warning("Modelo de verificação falhou: %s", resumo_para_log(exc))
+            ultimo_erro = exc
+    raise ultimo_erro or RuntimeError("Nenhum modelo de verificação configurado.")
+
+
 def verificar_insulto(mensagem: str) -> dict | None:
     """
     Usa o modelo de moderação para identificar insultos/abuso.
+
+    O modelo de segurança tem limite baixo na Groq; se ele falhar, o modelo rápido faz a mesma
+    classificação. Só bloqueia por erro quando nenhum dos dois responde.
     """
 
-    prompt = ChatPromptTemplate.from_messages(
-        [
-            ("system", GUARDRAIL_INSULTO_SYSTEM_PROMPT),
-            ("human", "{mensagem}"),
-        ]
-    )
-
-    chain = prompt | llm_guardrail.with_structured_output(ResultadoGuardrail)
-
     try:
-        res = chain.invoke({"mensagem": mensagem})
-
-        assert isinstance(res, ResultadoGuardrail)
+        res = _classificar(
+            GUARDRAIL_INSULTO_SYSTEM_PROMPT, mensagem, (llm_guardrail, llm_rapido)
+        )
 
         if res.bloqueado:
             return {
@@ -113,11 +133,12 @@ def verificar_insulto(mensagem: str) -> dict | None:
 
         return None
 
-    except Exception:  # noqa: BLE001 - fail-safe: qualquer erro na chamada ao LLM deve bloquear a mensagem
+    except Exception as exc:  # noqa: BLE001 - fail-safe: sem nenhum modelo, a mensagem não passa
+        logger.error("Guardrail de insulto indisponível: %s", resumo_para_log(exc))
         return {
             "bloqueado": True,
             "motivo": "erro_api_safeguard",
-            "mensagem": "Erro interno de segurança. Tente novamente.",
+            "mensagem": MENSAGEM_VERIFICACAO_INDISPONIVEL,
         }
 
 
@@ -145,19 +166,8 @@ def guardrail_escopo(mensagem: str) -> dict:
     Segundo guardrail: verifica se a mensagem pertence ao escopo do Inventra.
     """
 
-    prompt = ChatPromptTemplate.from_messages(
-        [
-            ("system", GUARDRAIL_ENTRADA_SYSTEM_PROMPT),
-            ("human", "{mensagem}"),
-        ]
-    )
-
-    chain = prompt | llm_rapido.with_structured_output(ResultadoGuardrail)
-
     try:
-        res = chain.invoke({"mensagem": mensagem})
-
-        assert isinstance(res, ResultadoGuardrail)
+        res = _classificar(GUARDRAIL_ENTRADA_SYSTEM_PROMPT, mensagem, (llm_rapido,))
 
         return {
             "bloqueado": res.bloqueado,
@@ -165,11 +175,12 @@ def guardrail_escopo(mensagem: str) -> dict:
             "mensagem": res.mensagem,
         }
 
-    except Exception:  # noqa: BLE001 - fail-safe: qualquer erro na chamada ao LLM deve bloquear a mensagem
+    except Exception as exc:  # noqa: BLE001 - fail-safe: sem modelo, a mensagem não passa
+        logger.error("Guardrail de escopo indisponível: %s", resumo_para_log(exc))
         return {
             "bloqueado": True,
             "motivo": "erro_api",
-            "mensagem": "Erro interno de segurança. Tente novamente.",
+            "mensagem": MENSAGEM_VERIFICACAO_INDISPONIVEL,
         }
 
 
