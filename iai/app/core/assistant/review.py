@@ -186,6 +186,11 @@ def _registro(agente, ferramenta, tentativa, decisao, avaliacao, inicio, erro=No
     return registro
 
 
+# Sem este rótulo o juiz lê a pergunta anterior como parte do pedido e reprova uma escrita que vem depois de
+# uma leitura ("Quanto tem de arroz?" e depois "Registre a saída de 5 kg"): intent_alignment 0,57 contra 0,90.
+MENSAGEM_ANTERIOR = "(mensagem anterior, já respondida) "
+
+
 def _julgar_proposta(
     agente, ferramentas, mensagens, pergunta, mensagem, args, tentativa
 ):
@@ -199,7 +204,7 @@ def _julgar_proposta(
             {
                 "candidate": {"status": "PROPOSAL_PENDING", "attempt": tentativa},
                 "user_request": pergunta,
-                "conversation": humanos[-3:-1],
+                "conversation": [MENSAGEM_ANTERIOR + h for h in humanos[-3:-1]],
                 "agent": agente,
                 "tool": {
                     "name": tool.name,
