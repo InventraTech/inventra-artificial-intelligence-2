@@ -1,4 +1,5 @@
 import re
+from typing import Any
 
 from langchain_core.language_models import BaseChatModel
 from langchain_google_genai import ChatGoogleGenerativeAI
@@ -114,7 +115,7 @@ def _groq(modelo: str, **opcoes) -> list[Candidato]:
 def _luna(timeout: float) -> list[Candidato]:
     """GPT Luna: OpenRouter primeiro (plano A), OpenAI direto depois (plano B). Só entram se houver chave."""
     candidatos: list[Candidato] = []
-    comuns = {
+    comuns: dict[str, Any] = {
         "timeout": timeout,
         "max_retries": 0,
         "stream_usage": True,
