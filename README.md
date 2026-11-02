@@ -1,105 +1,165 @@
-# IAI INVENTRA
+# IAI Inventra
 
-FastAPI + LangChain + LangGraph para conhecimento documental, consultas operacionais e
-propostas de alteração confirmadas pelo próprio solicitante autenticado. Esta branch não altera Spring nem frontend.
+Assistente de IA do Inventra, feito com **FastAPI + LangChain + LangGraph**. Responde dúvidas sobre o
+sistema, consulta estoque, compras e cadastros e **propõe** alterações de negócio, que só são executadas
+depois da confirmação do próprio solicitante autenticado.
 
-Para compreender a arquitetura, as regras essenciais e os limites reais antes de trabalhar no código,
-consulte [Contexto da IAI para outras IAs](CONTEXTO_TECNICO_IA_ATUAL.md).
+## Sumário
 
-O chat **live** valida cada tool localmente antes de executar ([gate](iai/app/core/assistant/tool_gate.py))
-e passa o turno pelo JEV depois do especialista e antes da resposta chegar ao usuário
-([revisão](iai/app/core/assistant/review.py)): uma chamada ao JEV por turno. Em turnos de escrita ele julga
-cada proposta (`propor_*`); em leituras e FAQ, o texto final contra o que as tools devolveram. Reprovada, a proposta
-é cancelada e o especialista roda de novo uma vez com os critérios que falharam. Isso não substitui a aprovação
-humana das alterações de negócio. Configure `TYPESAFE_API_KEY`; sem ela a escrita fica indisponível e a leitura segue sem o juiz.
-O demo determinístico continua disponível sem JEV real.
+- [Como funciona](#como-funciona)
+- [Executar localmente](#executar-localmente)
+- [Configuração](#configuração)
+- [API](#api)
+- [Agentes e tools](#agentes-e-tools)
+- [Aprovação de alterações](#aprovação-de-alterações)
+- [Integração com a API Spring](#integração-com-a-api-spring)
+- [Servidor MCP](#servidor-mcp)
+- [Documentos como contexto](#documentos-como-contexto-arquivos--qdrant)
+- [Métricas e observabilidade](#métricas-e-observabilidade)
+- [Testes](#testes)
+- [Deploy](#deploy)
+
+## Como funciona
+
+![Arquitetura dos agentes do IAI](docs/arquitetura-agentes.png)
+
+Todo turno de conversa segue o mesmo fluxo:
+
+1. **Guardrail de insulto:** anonimiza dados sensíveis e modera a mensagem.
+2. **Guardrail de escopo:** verifica se o assunto pertence ao Inventra.
+3. **Roteador:** escolhe o especialista conforme o endpoint da API e o cargo do usuário.
+4. **Especialistas:** Estoquista, Comprador, Supervisor ou FAQ. Estoquista e Comprador podem ler em paralelo.
+5. **JEV (juiz):** revisa as respostas e propostas contra as evidências e as regras de negócio. Se a rota for FAQ, a resposta segue direto para o guardrail de saída.
+6. **Orquestrador:** formata ou reúne as respostas dos especialistas.
+7. **Guardrail de saída:** restaura os dados anonimizados e entrega a resposta ao usuário.
+
+Regras que valem em todo o fluxo:
+
+- **Ferramentas autorizadas.** Cada chamada de tool passa por um [gate local](iai/app/core/assistant/tool_gate.py)
+  antes de executar. Operacionais usam a API Spring, o MongoDB, documentos e o FAQ, conforme as permissões do cargo.
+- **FAQ.** Consulta a base versionada do Inventra ([`iai/data/faq_inventra.jsonl`](iai/data/faq_inventra.jsonl)).
+  Se o modelo falhar ou o JEV reprovar, devolve o trecho literal da documentação.
+- **Alterações de negócio** geram propostas. A execução exige confirmação do próprio solicitante autenticado.
+  O JEV não substitui essa aprovação humana.
+- **JEV ([revisão](iai/app/core/assistant/review.py)).** Uma chamada por turno. Em escrita, julga cada proposta
+  (`propor_*`); em leitura e FAQ, o texto final contra o que as tools devolveram. Proposta reprovada é cancelada e o
+  especialista roda mais uma vez com os critérios que falharam. Sem `TYPESAFE_API_KEY` (ou com o JEV fora do ar), a
+  escrita fica indisponível e a leitura segue sem o juiz.
+- **Leituras paralelas.** Leituras independentes (`consultar_inventra`, `faq_retriever`, `buscar_historico`,
+  `buscar_documentos`) podem sair no mesmo lote, com concorrência máxima de quatro. Lotes com proposta rodam uma
+  etapa por vez.
+
+### Estrutura do código
+
+| Caminho | Conteúdo |
+|---|---|
+| `iai/app/main.py` | App FastAPI, CORS, `/health` |
+| `iai/app/core/assistant/` | Grafo LangGraph, guardrails, JEV, prompts, memória, gate de tools |
+| `iai/app/core/business/` | Domínio, propostas, aprovações e `SpringGateway` |
+| `iai/app/core/tools/` | Tools dos agentes (operacionais, FAQ, documentos, memória) |
+| `iai/app/core/files/` | Upload seguro, extração, guardrail e indexação no Qdrant |
+| `iai/app/core/routes/` | Rotas HTTP |
+| `iai/app/core/infra/` | Métricas, privacidade, retrieval, segurança, storage |
+| `iai/app/extras/` | Demo, áudio (Whisper) e servidor MCP |
+| `tests/` | Testes automatizados |
 
 ## Executar localmente
 
-Use Python 3.12 em um ambiente virtual. No Windows, o comando `python` pode
-apontar para outra versão; por isso selecione `py -3.12` ao criar o ambiente.
-Se essa versão não estiver instalada, use `py install 3.12` no gerenciador Python.
-Copie `iai/.env.example` para `iai/.env` para habilitar **explicitamente a demonstração**:
+Requer Python 3.12.
 
 ```powershell
-py -3.12 -m venv .venv
-.\.venv\Scripts\python.exe -m pip install -r requirements.txt
-if (-not (Test-Path iai/.env)) { Copy-Item iai/.env.example iai/.env }
-.\.venv\Scripts\python.exe -m uvicorn iai.app.main:app --host 127.0.0.1 --port 8000
+pip install -r requirements.txt
+copy iai\.env.example iai\.env
+python -m uvicorn iai.app.main:app --host 127.0.0.1 --port 8000
 ```
 
-Não sobrescreva um `.env` existente. A demonstração usa usuários fixos, estoque de
-exemplo, Mongo simulado em memória e intérprete limitado sem provedores de IA.
-Ela não é autenticação real, não consulta estoque real e perde dados ao reiniciar.
+- Não sobrescreva um `.env` existente.
+- Documentação interativa (Swagger): `http://127.0.0.1:8000/docs`.
+- Estado e modos: `GET /health` e cabeçalhos `X-IAI-*`.
 
-Use o executável de `.venv` também ao instalar dependências adicionais ou executar
-testes. Não é necessário ativar o ambiente nem alterar a política do PowerShell.
-Se aparecer `pg_config` ou uma exigência de compilador C++ durante a instalação,
-verifique a versão do Python e o arquivo de requisitos: a IAI não utiliza `jq` nem
-`psycopg2-binary`, e o acesso operacional ao PostgreSQL é feito pela API Spring.
+O `.env.example` já sobe o **modo demonstração**: usuários fixos, estoque de exemplo, Mongo simulado em memória e
+um intérprete limitado, sem provedores de IA. Não é autenticação real, não consulta estoque real e perde dados ao
+reiniciar. Para persistir propostas e histórico, use `IAI_STORAGE_MODE=mongo` e `MONGO_CONNECTION`.
 
-Para persistir solicitações e histórico (identidade e dados de negócio ainda simulados),
-use `IAI_STORAGE_MODE=mongo` e `MONGO_CONNECTION` apontando para um MongoDB.
+> Se a instalação pedir `pg_config` ou compilador C++, confira a versão do Python e o `requirements.txt`: o IAI não
+> usa `jq` nem `psycopg2-binary`; o acesso ao PostgreSQL é feito pela API Spring.
+
+### Identidades de demonstração
+
+Envie `Authorization: Bearer <identificador>`. São dados públicos de exemplo, não credenciais de produção, e os
+modos mock nunca devem ser expostos publicamente.
+
+| Identificador | Cargo | Cozinha |
+|---|---|---|
+| `demo-estoquista` | Estoquista | 1 |
+| `demo-comprador` | Comprador | 1 |
+| `demo-supervisor` | Supervisor | 1 |
+| `demo-outra-cozinha` | Supervisor | 2 |
 
 ### Testar no celular (mesma rede Wi-Fi)
 
-1. Suba o servidor com `--host 0.0.0.0` em vez de `127.0.0.1`.
-2. Descubra o IP do PC (PowerShell):
+1. Suba o servidor com `--host 0.0.0.0`.
+2. Descubra o IP do PC:
    ```powershell
    (Get-NetIPAddress -AddressFamily IPv4 | Where-Object { $_.InterfaceAlias -match "Wi-Fi|Ethernet" }).IPAddress
    ```
-3. No celular, abra `http://<IP-do-PC>:8000/docs` e use **Authorize** com o token do perfil
-   (`demo-estoquista`, `demo-comprador` ou `demo-supervisor`) para testar cada cargo.
+3. No celular, abra `http://<IP-do-PC>:8000/docs` e use **Authorize** com o token de um perfil demo.
 4. Se não abrir, libere a porta (PowerShell como administrador):
    ```powershell
    New-NetFirewallRule -DisplayName "IAI 8000" -Direction Inbound -Protocol TCP -LocalPort 8000 -Action Allow -Profile Private
    ```
-   Redes que isolam aparelhos (comum em Wi-Fi corporativo) bloqueiam o acesso: use o hotspot do
-   celular ou um túnel (`ngrok http 8000`). Não exponha `0.0.0.0` em rede pública no modo demo.
 
-Documentação interativa: `http://127.0.0.1:8000/docs`.
+Redes que isolam aparelhos (comum em Wi-Fi corporativo) bloqueiam o acesso: use o hotspot do celular ou um túnel
+(`ngrok http 8000`). Não exponha `0.0.0.0` em rede pública no modo demo.
 
-### Streaming de resposta (`POST /chat/stream`)
+## Configuração
 
-Mesmo corpo do `/chat`, resposta em NDJSON (`application/x-ndjson`, uma linha JSON por evento) que
-chega conforme a IA trabalha. O `/chat` continua igual. Quick Tunnel do Cloudflare não suporta SSE,
-por isso o formato é NDJSON.
+Por padrão, sem configuração demo, os modos são `spring` / `spring` / `mongo` / `live`. A prioridade das variáveis é:
+ambiente do processo, `iai/.env`, `iai/app/.env`. Os arquivos locais ficam fora do Git e do build Docker.
 
-| `type` | Campos | Quando |
-|---|---|---|
-| `etapa` | `id`, `status` (`inicio`/`fim`), `texto` | nó do grafo ou tool começando/terminando |
-| `pensamento` | `id`, `delta` | resumo do raciocínio do Gemini, ao vivo (não conferido pelo juiz) |
-| `artefato` | `artifact` | gráfico/tabela pronto (mesmo JSON de `artifacts` do `/chat`) |
-| `cartao` | `approval_id`, `pending_action` | proposta aguardando aprovação (mesmo JSON de `pending_actions`) |
-| `texto` | `delta` | resposta final, **só depois** do JEV aprovar, em pedaços |
-| `fim` | `status` (`aprovado`/`segura`) | último evento |
-| `erro` | `mensagem` | falha depois do HTTP 200 |
+| Variável | Uso |
+|---|---|
+| `IAI_AUTH_MODE` | `mock` ou `spring` |
+| `IAI_BUSINESS_MODE` | `mock` ou `spring` |
+| `IAI_STORAGE_MODE` | `mock` ou `mongo` |
+| `IAI_LLM_MODE` | `demo` ou `live` (padrão) |
+| `INVENTRA_API_URL` | Base da API Spring: localhost em HTTP ou endereço remoto em HTTPS |
+| `INVENTRA_API_HTTP_HOSTS` | Hosts liberados para HTTP (só laboratório); o JWT passa sem criptografia neles |
+| `INVENTRA_HTTP_TIMEOUT` | Timeout em segundos (padrão 10) |
+| `MONGO_CONNECTION` | MongoDB; nunca versione credenciais |
+| `GEMINI_API_KEY` / `GROQ_API_KEY` | Provedores dos agentes live |
+| `IAI_PENSAMENTO` | `off` desliga o resumo do raciocínio no streaming (gasta tokens de saída) |
+| `TYPESAFE_API_KEY` | JEV (TypeSafe). Sem ele, a escrita é cancelada (falha fechada) e a leitura segue sem o juiz |
+| `JEV_MODEL` / `JEV_APPROVAL_THRESHOLD` / `JEV_TIMEOUT` | `jev-1.13.0`, limiar 0.70, timeout 10 s |
+| `QDRANT_URL` / `QDRANT_API_KEY` | Qdrant para documentos; sem configuração, upload e listagem respondem 503 e o resto funciona |
+| `QDRANT_COLLECTION` / `EMBEDDING_MODEL` / `EMBEDDING_DIM` | `inventra_documentos`, `gemini-embedding-001`, 768 (outra dimensão exige coleção compatível) |
+| `ARQUIVOS_MAX_BYTES` / `_MAX_POR_ENVIO` / `_MAX_POR_USUARIO` / `_MAX_CARACTERES` | 10 MB, 10 por envio, 50 por usuário, 120 mil caracteres por arquivo |
+| `ARQUIVOS_GUARDRAIL_LLM` | `on` (padrão) ou `off`; classificador da ingestão, independente do JEV |
+| `CORS_ORIGINS` | Origens exatas do frontend, separadas por vírgula (padrão `localhost:3000` e `:5173`) |
+| `METRICAS_REQ_USUARIO_SEMANA` / `METRICAS_VALOR_RESOLUCAO_USD` | Premissas do `/metrics` (padrão 10 e 1.50) |
+| `IAI_MCP_TOKEN` | JWT usado pelo [servidor MCP](#servidor-mcp) |
+| `LANGCHAIN_TRACING_V2` / `LANGCHAIN_API_KEY` / `LANGCHAIN_PROJECT` | Tracing opcional no LangSmith |
 
-Linhas em branco são sinal de vida (a cada 8 s). Fechar a conexão para o grafo. O histórico guarda só
-o texto final aprovado. `IAI_PENSAMENTO=off` desliga o resumo do raciocínio (ele gasta tokens de saída).
+A API real não aceita identidade mock. O JWT é validado por `GET /api/users/me`, sem decodificação local e sem
+segredo compartilhado, e fica só no contexto da requisição (nunca em prompts, checkpoints, histórico ou log).
 
-Teste rápido: `curl -N -X POST http://127.0.0.1:8000/chat/stream -H "Authorization: Bearer demo-estoquista" -H "Content-Type: application/json" -d '{"session_id":"s1","user_id":"demo-estoquista","pergunta":"Ola"}'`
-Estado/configuração: `GET /health`; modos também aparecem nos cabeçalhos `X-IAI-*`.
+## API
 
-## Identidade demonstrativa
+| Rota | Descrição |
+|---|---|
+| `POST /chat` | Conversa com a IA |
+| `POST /chat/stream` | Mesma conversa, com resposta em streaming (NDJSON) |
+| `POST /chat/audio` | Conversa por áudio (transcrição com Whisper) |
+| `POST /chat/encerrar` | Encerra a sessão e resume o histórico |
+| `GET /chat/historico/{user_id}` | Histórico de conversas |
+| `GET /chat/mensagens/{doc_id}` | Mensagens de uma conversa |
+| `POST /queries` · `GET /queries/capabilities` | Consultas tipadas sem LLM; schemas, operações e permissões |
+| `/approvals/...` | Propostas e aprovações ([detalhes](#aprovação-de-alterações)) |
+| `POST/GET/DELETE /arquivos` | Documentos como contexto |
+| `GET /metrics` | Métricas SRE |
+| `GET /health` | Estado e modos |
 
-Use `Authorization: Bearer <identificador-demo>`:
-
-| Identificador | Papel | Cozinha |
-|---|---|---|
-| demo-estoquista | Estoquista | 1 |
-| demo-comprador | Comprador | 1 |
-| demo-supervisor | Supervisor | 1 |
-| demo-outra-cozinha | Supervisor | 2 |
-
-Esses identificadores são **dados públicos de exemplo**, não credenciais de produção.
-Não exponha os modos mock publicamente.
-
-## Chat e consultas
-
-`POST /chat` preserva `session_id`, `user_id`, `pergunta` e o campo `resposta`. A resposta agora inclui `artifacts` (zero ou um elemento) e `pending_actions` (ações persistidas para revisão).
-O `user_id` deve corresponder à identidade autenticada. `request_id` opcional pode ser
-reutilizado pelo frontend ao repetir a mesma requisição; é a chave da rodada para propostas.
+### `POST /chat`
 
 ```json
 {
@@ -110,116 +170,146 @@ reutilizado pelo frontend ao repetir a mesma requisição; é a chave da rodada 
 }
 ```
 
-No demo, esse exemplo gera duas propostas. O saldo permanece igual até aprovação.
-Esse intérprete tem cobertura limitada; compreensão geral de linguagem natural usa os
-agentes `IAI_LLM_MODE=live` e chaves Gemini/Groq. API de negócio e armazenamento podem
-continuar simulados enquanto se valida o provedor real.
+- `user_id` deve corresponder à identidade autenticada.
+- `request_id` é opcional; o frontend pode reutilizá-lo ao repetir a requisição. É a chave da rodada para propostas.
+- A resposta traz `resposta`, `artifacts` (zero ou um) e `pending_actions` (propostas persistidas para revisão).
+- No demo, o exemplo acima gera duas propostas e o saldo só muda após a aprovação. O intérprete demo tem cobertura
+  limitada; a compreensão geral de linguagem natural usa `IAI_LLM_MODE=live` com chaves Gemini/Groq.
 
-`POST /chat/audio` (multipart: `session_id`, `user_id`, `request_id` opcional e o arquivo
-`audio` em webm, ogg, mp3, m4a, mp4 ou wav, até 10 MB) transcreve a fala com Whisper
-(`whisper-large-v3-turbo`, Groq) e segue o mesmo fluxo e a mesma autenticação do `/chat`.
-Responde com `transcricao`, `resposta`, `artifacts` e `pending_actions`. Exige `GROQ_API_KEY`; o áudio não é
-gravado, só o texto transcrito entra no histórico.
+### `POST /chat/stream`
 
-`POST /queries` oferece as mesmas consultas tipadas sem depender de LLM.
-Exemplo: `{"resource":"validade","days":7}`.
-`GET /queries/capabilities` informa schemas, operações e limitações.
+Mesmo corpo do `/chat`. A resposta é NDJSON (`application/x-ndjson`, um JSON por linha) enviada conforme a IA
+trabalha. O formato é NDJSON porque o Quick Tunnel do Cloudflare não suporta SSE.
 
-## Artefatos e leituras paralelas
+| `type` | Campos | Quando |
+|---|---|---|
+| `etapa` | `id`, `status` (`inicio`/`fim`), `texto` | Nó do grafo ou tool começando/terminando |
+| `pensamento` | `id`, `delta` | Resumo do raciocínio do Gemini, ao vivo (não conferido pelo juiz) |
+| `artefato` | `artifact` | Gráfico ou tabela pronto (mesmo JSON de `artifacts`) |
+| `cartao` | `approval_id`, `pending_action` | Proposta aguardando aprovação (mesmo JSON de `pending_actions`) |
+| `texto` | `delta` | Resposta final, **só depois** da aprovação do JEV, em pedaços |
+| `fim` | `status` (`aprovado`/`segura`) | Último evento |
+| `erro` | `mensagem` | Falha depois do HTTP 200 |
 
-O backend não renderiza gráficos nem gera HTML. `artifacts` contém no máximo uma tabela
-(`type=table`, `columns`, `rows`) ou gráfico (`type=chart`, `chart_type=bar|pie`, `labels`,
-`datasets`, `unit`). Ambos identificam `source` e `mocked`. O modelo escolhe somente formato/fonte;
-os dados são projetados dos resultados de ferramentas autorizadas desta rodada. Não há estatísticas
-sobre páginas incompletas nem comparação de quantidades com unidades incompatíveis. Pizza usa
-contagem de registros por status/categoria. Vendas e comparação entre cozinhas não são suportadas.
+Linhas em branco são sinal de vida (a cada 8 s). Fechar a conexão interrompe o grafo. O histórico guarda só o texto
+final aprovado.
 
-Exemplos no demo: "Compare as quantidades em estoque em barras"; "Mostre os lotes próximos do
-vencimento com produto validade e quantidade". Consultas escalares e conceitos continuam em texto.
-A seleção live usa saída estruturada do modelo rápido; o demo usa regras limitadas e não chama LLM.
-O histórico continua textual; os artefatos não são persistidos como visualizações recuperáveis.
-
-Leituras independentes de `consultar_inventra`, `faq_retriever`, `buscar_historico` e `buscar_documentos` podem ser emitidas
-no mesmo lote e executadas com concorrência máxima de quatro. O `ToolNode` faz fan-in antes de
-retomar o especialista. Cada chamada live conserva o gate local; o JEV julga o turno depois. Evidências
-são uma fotografia anterior ao lote, e permissões de uso único permanecem isoladas por contexto.
-Lotes com proposta são processados uma etapa por vez; criação, confirmação e execução são sequenciais.
-Falhas de fontes complementares podem produzir resposta parcial.
-
-`pending_actions` é separado dos artefatos visuais e contém ID, hash, operação, parâmetros,
-justificativa, estado, prazo e snapshot dos alvos. Confirme com o próprio usuário autenticado:
-
-```http
-POST /approvals/{id}/decision
-Authorization: Bearer <token atual do solicitante>
-Content-Type: application/json
+```bash
+curl -N -X POST http://127.0.0.1:8000/chat/stream \
+  -H "Authorization: Bearer demo-estoquista" -H "Content-Type: application/json" \
+  -d '{"session_id":"s1","user_id":"demo-estoquista","pergunta":"Ola"}'
 ```
 
-```json
-{"decision":"approve","proposal_hash":"<hash retornado na proposta>"}
-```
+### `POST /chat/audio`
 
-## Tools por agente
+Multipart com `session_id`, `user_id`, `request_id` (opcional) e o arquivo `audio` (webm, ogg, mp3, m4a, mp4 ou wav,
+até 10 MB). Transcreve com Whisper (`whisper-large-v3-turbo`, Groq) e segue o mesmo fluxo e a mesma autenticação do
+`/chat`. Responde com `transcricao`, `resposta`, `artifacts` e `pending_actions`. Exige `GROQ_API_KEY`. O áudio não é
+gravado; só o texto transcrito entra no histórico.
 
-O roteador escolhe o agente pela intenção da mensagem; as tools de cada agente e quem pode
-propor cada operação (`ROLE_OPERATIONS`) estão em `GET /queries/capabilities`
-(`agents` e `operations[].allowed_roles`).
+### `POST /queries`
+
+Consultas tipadas sem depender de LLM, por exemplo `{"resource":"validade","days":7}`.
+`GET /queries/capabilities` informa schemas, operações, limitações e quem pode propor cada operação.
+
+### Artefatos
+
+O backend não renderiza gráficos nem gera HTML. `artifacts` contém no máximo um item:
+
+- **Tabela:** `type=table`, `columns`, `rows`.
+- **Gráfico:** `type=chart`, `chart_type=bar|pie`, `labels`, `datasets`, `unit`.
+
+Ambos identificam `source` e `mocked`. O modelo escolhe só formato e fonte; os dados são projetados dos resultados
+das tools autorizadas da rodada. Não há estatísticas sobre páginas incompletas nem comparação de unidades
+incompatíveis. Pizza usa contagem de registros por status/categoria. Vendas e comparação entre cozinhas não são
+suportadas. Exemplos: "Compare as quantidades em estoque em barras"; "Mostre os lotes próximos do vencimento".
+Os artefatos não são persistidos; o histórico é textual.
+
+## Agentes e tools
+
+O roteador escolhe o agente pela intenção da mensagem. As tools de cada agente e quem pode propor cada operação
+(`ROLE_OPERATIONS`) estão em `GET /queries/capabilities`.
 
 | Agente | Tools |
 |---|---|
 | Roteador | `buscar_historico` |
 | FAQ | `faq_retriever` |
-| Estoquista | `consultar_inventra`, `consultar_solicitacoes_iai`, `buscar_historico`, `faq_retriever` + propor: criar lote, registrar entrada, registrar saída, ajustar estoque, registrar inventário, registrar contagem, alterar contagem |
-| Comprador | as mesmas de consulta/histórico/FAQ + propor: criar requisição, adicionar/remover item, cancelar requisição, cadastrar/desativar fornecedor |
-| Supervisor | todas as anteriores + propor: criar/editar/desativar produto |
+| Estoquista | `consultar_inventra`, `consultar_solicitacoes_iai`, `buscar_historico`, `faq_retriever`, `buscar_documentos` + propor: criar lote, registrar entrada, saída, ajustar estoque, registrar inventário, registrar e alterar contagem |
+| Comprador | As mesmas de consulta, histórico e FAQ + propor: criar requisição, adicionar/remover item, cancelar requisição, cadastrar/desativar fornecedor |
+| Supervisor | Todas as anteriores + propor: criar, editar e desativar produto |
 
-`consultar_inventra` é uma única tool com o parâmetro `resource` (produtos, estoque, lotes,
-validade, fornecedores, requisições, inventários, alertas, catálogos etc.). Nenhuma tool aprova
-ou executa: as `propor_*` só criam propostas.
+`consultar_inventra` é uma única tool com o parâmetro `resource` (produtos, estoque, lotes, validade, fornecedores,
+requisições, inventários, alertas, catálogos etc.). Nenhuma tool aprova ou executa: as `propor_*` só criam propostas.
 
-## Integração com a API Spring e com agentes externos (MCP)
+## Aprovação de alterações
 
-**Sistema integrado:** API REST do Inventra (Spring), em `INVENTRA_API_URL`. Os agentes não
-acessam o PostgreSQL; leem e propõem alterações pelas tools, que chamam a API
-(`SpringGateway`, em `business.py`).
+1. A proposta nasce de uma tool do agente ou de `POST /approvals`.
+2. O solicitante vê `GET /approvals/inbox`, restrito às suas pendências na cozinha autenticada.
+3. Ele envia `POST /approvals/{id}/decision` com Bearer atual, a decisão e o hash da proposta.
+4. A execução é única e tentada na hora; `POST /approvals/{id}/execute` retoma uma aprovação válida após uma
+   indisponibilidade anterior ao envio.
+5. O solicitante acompanha por `GET /approvals/{id}` ou pela listagem de suas solicitações.
 
-**Autenticação:** o JWT do usuário vai em `Authorization: Bearer` em toda chamada. A identidade
-(usuário, cozinha, cargo) é validada em `GET /api/users/me` e nunca vem do cliente ou do modelo.
-O token fica só no contexto da requisição (não entra em prompt, histórico ou log).
+```http
+POST /approvals/{id}/decision
+Authorization: Bearer <token atual do solicitante>
+Content-Type: application/json
+
+{"decision":"approve","proposal_hash":"<hash retornado na proposta>"}
+```
+
+`pending_actions` traz ID, hash, operação, parâmetros, justificativa, estado, prazo e snapshot dos alvos.
+
+**Quem pode propor o quê** (fora disso, 403): estoquista → lotes, entradas, saídas, ajustes, inventários e
+contagens; comprador → requisições e fornecedores; supervisor → tudo, inclusive produtos. O mapa está em
+`ROLE_OPERATIONS` ([`domain.py`](iai/app/core/business/domain.py)).
+
+**Regras:**
+
+- Prazo de 7 dias. Só o solicitante confirma ou rejeita; Supervisor não confirma ações alheias.
+- Perfil atual, cozinha, hash e snapshot são revalidados. Decisões legadas de terceiros não autorizam execução.
+- A API Spring volta a aplicar as próprias permissões na execução.
+- Requisições nascem em `DRAFT`; incluir/remover itens exige esse estado. Cancelar admite `DRAFT`, `UNDER_REVIEW` ou `APPROVED`.
+- Não há exclusão física pelo IAI. Operações em itens ou lotes distintos são propostas independentes, sem atomicidade de grupo.
+- Uma falha após iniciar o envio pode resultar em `RESULTADO_INCERTO`; o IAI **não** repete a escrita. A
+  reconciliação completa entre serviços depende do backend.
+- Edição de contagem e remoção lógica de item ainda dependem de endpoints externos, que não foram inventados aqui.
+- A página de aprovação está em outro repositório.
+
+## Integração com a API Spring
+
+Os agentes não acessam o PostgreSQL: leem e propõem alterações pelas tools, que chamam a API REST do Inventra
+(`INVENTRA_API_URL`) por meio do `SpringGateway` ([`gateway.py`](iai/app/core/business/gateway.py)). O JWT do
+usuário vai em `Authorization: Bearer` em toda chamada, e a identidade (usuário, cozinha, cargo) vem de
+`GET /api/users/me`, nunca do cliente ou do modelo.
 
 | Tool (agente) | Endpoints consumidos |
 |---|---|
-| `consultar_inventra` (todos) | `GET /api/products`, `/api/suppliers`, `/api/stock-batches` (+ `/expiring-soon`, `/low-stock`), `/api/products/{id}/kitchen-parameters`, `/api/products/{id}/suppliers`, `/api/requisitions` (+ `/{id}/items`), `/api/inventories` (+ `/{id}/counts`), `/api/alerts`, `/api/categories`, `/api/units`, `/api/kitchens`; `consumo` (produtos que mais saem) é estimado dos mesmos lotes: quantidade inicial − atual |
-| `planejar_baixa` (estoquista, supervisor) | leitura: acha o produto pelo nome em `/api/stock-batches` e monta o plano de baixa por validade (vence primeiro, sai primeiro); não altera dados, a baixa continua sendo uma proposta aprovada pelo solicitante |
-| `propor_*` (estoquista, comprador, supervisor) | só criam proposta no Mongo da IAI; depois da aprovação, a execução chama `POST/PUT/PATCH` em `/api/products`, `/api/suppliers`, `/api/stock-batches` (`restock`, `consume`, `adjust`), `/api/requisitions` (`items`, `cancel`) e `/api/inventories` (`counts`) |
+| `consultar_inventra` (todos) | `GET /api/products`, `/api/suppliers`, `/api/stock-batches` (+ `/expiring-soon`, `/low-stock`), `/api/products/{id}/kitchen-parameters`, `/api/products/{id}/suppliers`, `/api/requisitions` (+ `/{id}/items`), `/api/inventories` (+ `/{id}/counts`), `/api/alerts`, `/api/categories`, `/api/units`, `/api/kitchens`. O `consumo` (produtos que mais saem) é estimado dos lotes: quantidade inicial − atual |
+| `planejar_baixa` (estoquista, supervisor) | Leitura: acha o produto pelo nome em `/api/stock-batches` e monta o plano de baixa por validade (vence primeiro, sai primeiro). Não altera dados; a baixa continua sendo uma proposta aprovada |
+| `propor_*` (estoquista, comprador, supervisor) | Só criam proposta no Mongo do IAI. Após a aprovação, a execução chama `POST/PUT/PATCH` em `/api/products`, `/api/suppliers`, `/api/stock-batches` (`restock`, `consume`, `adjust`), `/api/requisitions` (`items`, `cancel`) e `/api/inventories` (`counts`) |
 
-**Erros:** a integração nunca derruba o agente. API fora do ar, timeout, status inesperado ou
-resposta inválida viram um resultado com código (`SERVICO_INDISPONIVEL`, `RESPOSTA_INVALIDA`,
-`SEM_PERMISSAO`, `NAO_ENCONTRADO`), que o agente explica ao usuário. Escritas com resultado
-incerto (`RESULTADO_INCERTO`) não são repetidas automaticamente. Cobertos em
-`tests/test_business.py` com falhas HTTP simuladas.
+**Erros:** a integração nunca derruba o agente. API fora do ar, timeout, status inesperado ou resposta inválida viram
+um resultado com código (`SERVICO_INDISPONIVEL`, `RESPOSTA_INVALIDA`, `SEM_PERMISSAO`, `NAO_ENCONTRADO`,
+`RESULTADO_INCERTO`), que o agente explica ao usuário. Cobertos em `tests/test_business.py`.
 
-**Como validar contra a API real:** `RUN_SPRING_TESTS=1` e `SPRING_TEST_TOKEN` (veja Testes), ou
+**Validar contra a API real:** `RUN_SPRING_TESTS=1` com `SPRING_TEST_TOKEN` (veja [Testes](#testes)), ou
 `POST /queries` com `{"resource": "produtos"}` e um JWT no **Authorize** do `/docs`.
-
-**Agentes externos:** o servidor MCP abaixo expõe as mesmas tools a qualquer cliente MCP.
-Não há implementação de A2A.
 
 ## Servidor MCP
 
-As mesmas tools dos agentes podem ser usadas por Cursor, Cline ou qualquer cliente MCP, sem
-subir a API. O servidor (`iai/app/extras/mcp_server.py`) usa transporte **stdio**: o cliente inicia o
-processo e conversa por entrada/saída padrão (não há porta nem URL).
+Expõe as mesmas tools dos agentes a Cursor, Cline ou qualquer cliente MCP, sem subir a API. O servidor
+([`mcp_server.py`](iai/app/extras/mcp_server.py)) usa transporte **stdio**: o cliente inicia o processo e conversa
+por entrada/saída padrão (não há porta nem URL). Não há implementação de A2A.
 
-- **Identidade:** vem de `IAI_MCP_TOKEN` (JWT do Spring), validado como no `/chat`. Cada
-  perfil vê só as tools do seu agente (estoquista 11, comprador 10, supervisor 20) e a regra
-  `ROLE_OPERATIONS` continua valendo.
-- **Nada executa:** as `propor_*` só criam propostas; a aprovação continua em `/approvals`.
-  Cada chamada de tool é uma rodada nova, então repetir a mesma proposta cria outra proposta.
+- **Identidade:** vem de `IAI_MCP_TOKEN` (JWT do Spring), validado como no `/chat`. Cada perfil vê só as tools do
+  seu agente (estoquista 11, comprador 10, supervisor 20) e `ROLE_OPERATIONS` continua valendo.
+- **Nada executa:** as `propor_*` só criam propostas; a aprovação continua em `/approvals`. Cada chamada é uma
+  rodada nova, então repetir a mesma proposta cria outra.
 - **Logs** vão para o stderr; o stdout é o canal do protocolo (nunca use `print`).
 
-Configuração do Cursor (`.cursor/mcp.json`) ou do Cline (`cline_mcp_settings.json`), com
-caminhos absolutos da **sua** máquina (`python -c "import sys; print(sys.executable)"`):
+Configuração do Cursor (`.cursor/mcp.json`) ou do Cline (`cline_mcp_settings.json`), com caminhos absolutos da
+**sua** máquina (`python -c "import sys; print(sys.executable)"`):
 
 ```json
 {
@@ -233,197 +323,121 @@ caminhos absolutos da **sua** máquina (`python -c "import sys; print(sys.execut
 }
 ```
 
-Para testar sem o Spring, acrescente em `env` os modos de demonstração
-(`IAI_AUTH_MODE`, `IAI_BUSINESS_MODE`, `IAI_STORAGE_MODE` = `mock`, `IAI_LLM_MODE` = `demo`) e use
-`"IAI_MCP_TOKEN": "demo-supervisor"`. No Cursor, deixe o chat em **Agent** (em Ask as tools MCP
-não executam) e confira os logs em View → Output → MCP Logs. Não coloque o token no Git.
+Para testar sem o Spring, acrescente em `env` `IAI_AUTH_MODE`, `IAI_BUSINESS_MODE` e `IAI_STORAGE_MODE` = `mock`,
+`IAI_LLM_MODE` = `demo`, e use `"IAI_MCP_TOKEN": "demo-supervisor"`. No Cursor, deixe o chat em **Agent** (em Ask as
+tools MCP não executam) e confira os logs em View → Output → MCP Logs. Não coloque o token no Git.
 
 ## Documentos como contexto (arquivos + Qdrant)
 
-O usuário envia arquivos e os agentes passam a consultá-los com a tool `buscar_documentos`.
+O usuário envia arquivos e os agentes os consultam com a tool `buscar_documentos`.
 
 | Rota | O que faz |
 |---|---|
-| `POST /arquivos` | multipart: `arquivos` (um ou vários, até `ARQUIVOS_MAX_POR_ENVIO`) e `compartilhar` (opcional; só SUPERVISOR). Pasta = vários arquivos; o caminho relativo no nome do arquivo vira o campo `pasta`. Devolve o status de cada arquivo (`indexado`/`recusado`/`erro`) |
-| `GET /arquivos` | documentos do usuário e os compartilhados pelo supervisor da cozinha |
-| `DELETE /arquivos/{arquivo_id}` | dono remove o próprio; supervisor remove qualquer um da própria cozinha |
+| `POST /arquivos` | Multipart: `arquivos` (um ou vários, até `ARQUIVOS_MAX_POR_ENVIO`) e `compartilhar` (opcional; só SUPERVISOR). Uma pasta são vários arquivos; o caminho relativo no nome vira o campo `pasta`. Devolve o status de cada um (`indexado`/`recusado`/`erro`) |
+| `GET /arquivos` | Documentos do usuário e os compartilhados pelo supervisor da cozinha |
+| `DELETE /arquivos/{arquivo_id}` | O dono remove o próprio; o supervisor remove qualquer um da própria cozinha |
 
-Aceitos: PDF (com texto), `.docx`, `.xlsx`, `.pptx`, `.csv`, `.txt`, `.md`, `.png`, `.jpg`, `.webp`.
+**Aceitos:** PDF (com texto), `.docx`, `.xlsx`, `.pptx`, `.csv`, `.txt`, `.md`, `.png`, `.jpg`, `.webp`.
 
-**Segurança (nada é gravado em disco nem executado)**, em `iai/app/core/files/`:
+**Segurança** (nada é gravado em disco nem executado), em [`iai/app/core/files/`](iai/app/core/files):
 
-1. `security.py`: lista de permitidos por extensão; recusa executáveis/scripts (`.exe`, `.dll`, `.bat`, `.ps1`, `.js`...),
-   compactados (`.zip`, `.rar`, `.7z`...), macros (`.docm`, `.xlsm`...), HTML/SVG, Office antigo e dupla extensão
-   (`fatura.exe.pdf`). Confere a **assinatura real** do conteúdo (um `.exe` renomeado para `.pdf` é barrado).
-   PDF sem JavaScript/Launch/anexos/ações automáticas/senha; OOXML sem macro, objeto OLE/ActiveX, vínculo externo,
-   DOCTYPE/ENTITY e zip bomb; imagem decodificada e **reencodada** (remove metadados e payloads escondidos).
-2. `extraction.py`: texto oculto (`vanish`, abas ocultas, caracteres invisíveis/tag characters) é descartado.
-3. `guardrail.py`: prompt injection indireta — regras determinísticas + classificador LLM (Gemini, com Groq de reserva),
-   fail-closed (erro do classificador = arquivo recusado). Senhas/chaves são mascaradas antes de qualquer envio.
-   Só depois de aprovado o arquivo vai para o Qdrant.
-4. `descricao_imagem.py`: agente de visão (Gemini) descreve tudo da imagem; ordens escritas na imagem a recusam.
-5. Na leitura, `buscar_documentos` filtra por cozinha/usuário no Qdrant, descarta trechos suspeitos e entrega o
-   conteúdo ao modelo marcado como dado de terceiros.
+1. `security.py`: lista de extensões permitidas; recusa executáveis, scripts, compactados, macros, HTML/SVG, Office
+   antigo e dupla extensão (`fatura.exe.pdf`). Confere a **assinatura real** do conteúdo. PDF sem
+   JavaScript/Launch/anexos/ações automáticas/senha; OOXML sem macro, OLE/ActiveX, vínculo externo, DOCTYPE/ENTITY e
+   zip bomb; imagem decodificada e **reencodada** (remove metadados e payloads escondidos).
+2. `extraction.py`: texto oculto (`vanish`, abas ocultas, caracteres invisíveis) é descartado.
+3. `guardrail.py`: prompt injection indireta, com regras determinísticas + classificador LLM (Gemini, Groq de
+   reserva), fail-closed (erro do classificador = arquivo recusado). Senhas e chaves são mascaradas antes de qualquer
+   envio. Só depois de aprovado o arquivo vai para o Qdrant.
+4. `image_description.py`: agente de visão (Gemini) descreve a imagem; ordens escritas nela a recusam.
+5. Na leitura, `buscar_documentos` filtra por cozinha/usuário, descarta trechos suspeitos e entrega o conteúdo ao
+   modelo marcado como dado de terceiros.
 
-Qdrant: uma coleção (`inventra_documentos`) com o campo `tipo` no payload (um índice para todos os formatos, filtrável
-por `tipo`) e índices em `kitchen_id`, `user_id`, `arquivo_id`, `tipo`, `compartilhado` e `ordem`. Cada arquivo vira
-trechos de ~1000 caracteres (150 de sobreposição; tabelas repetem o cabeçalho). Reenviar o mesmo arquivo substitui o anterior.
+**Qdrant:** uma coleção (`inventra_documentos`) com o campo `tipo` no payload e índices em `kitchen_id`, `user_id`,
+`arquivo_id`, `tipo`, `compartilhado` e `ordem`. Cada arquivo vira trechos de ~1000 caracteres (150 de sobreposição;
+tabelas repetem o cabeçalho). Reenviar o mesmo arquivo substitui o anterior.
 
-Limites conhecidos: não há antivírus por assinatura de malware (é lista de permitidos + validação estrutural);
-PDF escaneado sem texto é recusado (envie como imagem); `.doc/.xls/.ppt` antigos e arquivos compactados são recusados.
+**Limites:** não há antivírus por assinatura (é lista de permitidos + validação estrutural); PDF escaneado sem texto
+é recusado (envie como imagem); `.doc`/`.xls`/`.ppt` antigos e compactados são recusados.
 
-## Aprovação
+## Métricas e observabilidade
 
-1. Proposta criada por ferramenta do agente ou `POST /approvals`.
-2. O próprio solicitante vê `GET /approvals/inbox`, restrito às suas pendências na cozinha autenticada.
-3. O solicitante envia `POST /approvals/{id}/decision` com Bearer atual, decisão e hash da proposta.
-4. Execução única quando disponível. Resultado mock continua explicitamente identificado.
-5. Solicitante acompanha `GET /approvals/{id}` ou listagem de suas solicitações.
-
-Quem pode **propor** o quê (chat ou `POST /approvals`; fora disso, 403):
-estoquista → lotes, entradas, saídas, ajustes, inventários e contagens; comprador →
-requisições e fornecedores; supervisor → tudo, inclusive produtos. O mapa fica em
-`ROLE_OPERATIONS` (`domain.py`) e aparece em `GET /queries/capabilities` (`allowed_roles`).
-A API Spring continua aplicando as próprias permissões na execução. Requisições nascem em `DRAFT`; inclusão/remoção de itens exige esse estado. Cancelamento admite `DRAFT`, `UNDER_REVIEW` ou `APPROVED`.
-
-Prazo: 7 dias. Somente o solicitante confirma/rejeita; Supervisor não confirma ações alheias. Perfil atual, cozinha, hash e snapshot são revalidados. Decisões legadas de terceiros não autorizam nova execução.
-Nenhuma tool do modelo aprova ou executa. Não há exclusão física pela IAI.
-Operações em itens/lotes distintos são propostas independentes, sem atomicidade de grupo.
-
-## Modos reais e dependências
-
-Por padrão, sem configuração demo, os modos são `spring/spring/mongo/live`.
-Configure em ambiente ou `iai/.env`:
-
-Por compatibilidade, `iai/app/.env` também é carregado para variáveis ainda não
-definidas. A prioridade é: ambiente do processo, `iai/.env`, `iai/app/.env`.
-Os dois arquivos locais permanecem ignorados pelo Git e pelo build Docker.
-
-No Render, adicione `TYPESAFE_API_KEY` em **Environment**, junto às configurações
-existentes. `IAI_LLM_MODE` é opcional: o padrão já é `live`; `demo` seleciona apenas
-a demonstração offline. Não publique o arquivo `.env` local.
-
-| Variável | Uso |
-|---|---|
-| IAI_AUTH_MODE | mock ou spring |
-| IAI_BUSINESS_MODE | mock ou spring |
-| IAI_STORAGE_MODE | mock ou mongo |
-| IAI_LLM_MODE | demo ou live |
-| INVENTRA_API_URL | base Spring, localhost em HTTP ou endereço remoto HTTPS |
-| INVENTRA_API_HTTP_HOSTS | hosts liberados para HTTP (só laboratório, ex.: `34.201.182.193`); o JWT passa sem criptografia neles || INVENTRA_HTTP_TIMEOUT | segundos; padrão 10 |
-| MONGO_CONNECTION | MongoDB; não inclua credenciais no Git |
-| GEMINI_API_KEY / GROQ_API_KEY | provedores para agentes live |
-| TYPESAFE_API_KEY | TypeSafe/JEV que julga o turno dos agentes live; sem ele ou fora do ar, a escrita é cancelada (falha fechada) e a leitura segue sem o juiz |
-| QDRANT_URL / QDRANT_API_KEY | serviço Qdrant para documentos; sem configuração, upload/listagem respondem 503 e o restante funciona |
-| QDRANT_COLLECTION / EMBEDDING_MODEL / EMBEDDING_DIM | `inventra_documentos`, `gemini-embedding-001`, 768; outra dimensão exige coleção compatível |
-| ARQUIVOS_MAX_BYTES / ARQUIVOS_MAX_POR_ENVIO / ARQUIVOS_MAX_POR_USUARIO / ARQUIVOS_MAX_CARACTERES | 10 MB, 10 por envio, 50 por usuário, 120 mil caracteres por arquivo |
-| ARQUIVOS_GUARDRAIL_LLM | `on` (padrão) ou `off`; controle do classificador da ingestão, independente do JEV das tools live |
-| JEV_MODEL / JEV_APPROVAL_THRESHOLD / JEV_TIMEOUT | versão `jev-1.13.0`, limiar 0.70, timeout 10 s |
-| CORS_ORIGINS | origens exatas do frontend, separadas por vírgula (padrão `http://localhost:3000,http://localhost:5173`) |
-| METRICAS_REQ_USUARIO_SEMANA / METRICAS_VALOR_RESOLUCAO_USD | premissas do `/metrics` (padrão 10 e 1.50) |
-
-API real não aceita identidade mock. JWT é validado por `GET /api/users/me`, sem
-decodificação não verificada e sem segredo de assinatura compartilhado. Tokens permanecem
-apenas no contexto HTTP; não são colocados em prompts, checkpoints ou histórico.
-
-A confirmação usa a identidade do próprio solicitante e seu JWT fresco, sem delegação de outro usuário.
-A decisão tenta executar imediatamente; `POST /approvals/{id}/execute` permite retomar uma aprovação
-válida após indisponibilidade anterior ao envio. A API Spring volta a aplicar suas permissões.
-Edição de contagem e remoção lógica de item ainda têm dependências externas.
-Não inventamos endpoints para essas capacidades.
-
-Uma falha após iniciar envio pode ser `RESULTADO_INCERTO`. A IAI não repete a escrita.
-Reconciliação/idempotência completa entre serviços depende do backend.
-A página de aprovação está em outro repositório e não foi criada aqui.
-
-## Consolidação da main
-
-A branch `fix/human-in-the-loop` incorpora os commits `d9b3023` (#22) e `ae7155c` (#23).
-Mantém artefatos, confirmação do solicitante e paralelismo, adaptando o ponto de entrada
-`business/actions.py` ao serviço durável de propostas. Na revisão do PR #24, foi restaurado
-o JEV passou a julgar o turno depois do especialista. O FAQ usa busca determinística e, se o modelo falhar ou o JEV reprovar o texto, devolve o trecho literal da documentação. Detalhes em [CONSOLIDACAO_MAIN.md](CONSOLIDACAO_MAIN.md).
-
-## Testes
-
-Validação local de 26/10/2026 após artefatos, HITL do solicitante e fan-out:
-**394 testes aprovados, 6 ignorados; cobertura de 91,56%** (baseline da branch antes da integração: 91,42%).
-Ruff e mypy passaram. Testes externos permaneceram desativados; o teste de retomada
-Mongo entre processos é opt-in e não foi executado nesta validação.
-
-```powershell
-.\.venv\Scripts\python.exe -m pip install -r requirements-dev.txt
-.\.venv\Scripts\python.exe -m pytest --cov=iai --cov-report=term-missing --cov-fail-under=91.42
-.\.venv\Scripts\python.exe -m ruff check iai
-.\.venv\Scripts\python.exe -m mypy iai --follow-imports=skip
-```
-
-Os testes comuns usam Mongo/dados/identidades simulados. O grafo também é exercitado com
-agentes LangChain e um modelo roteirizado; isso não mede a qualidade de Gemini/Groq.
-Testes opcionais, somente com serviços explicitamente disponibilizados:
-
-- `RUN_LLM_TESTS=1` e chaves reais: FAQ pelos provedores, negócio/Mongo continuam mockados.
-- `RUN_MONGO_TESTS=1` e `MONGO_TEST_CONNECTION`: persistência e decisão atômica em base
-  temporária exclusiva `iai_test_<uuid>`, incluindo preparação e confirmação em processos
-  separados; não usa `dbIAI`.
-- `RUN_SPRING_TESTS=1` e `SPRING_TEST_TOKEN`: leitura de identidade/catálogo real, sem escrita.
-- `RUN_JEV_TESTS=1` e `TYPESAFE_API_KEY`: contrato real de decisões TypeSafe, sem executar tools de negócio.
-
-
-## Observabilidade e métricas SRE
-
-O backend só expõe os números; a tela é feita no front-end (React) por outra pessoa, consumindo
-`GET /metrics` (exige `Authorization: Bearer`; só considera a cozinha do usuário e, para quem não é
-SUPERVISOR, apenas as próprias requisições). O contrato completo (campos, tipos e descrições) aparece em `/docs` (Swagger).
+O backend só expõe os números; a tela é feita no front-end consumindo `GET /metrics` (exige Bearer; considera só a
+cozinha do usuário e, para quem não é SUPERVISOR, apenas as próprias requisições). O contrato completo está no `/docs`.
 
 ```
-GET /metrics?periodo=semana            # padrão: histórico dos últimos 7 dias, projeção semanal
-GET /metrics?periodo=mes               # histórico dos últimos 30 dias, projeção mensal
-GET /metrics?periodo=mes&usuarios=50&usuarios=5000   # cenários customizados (padrão: 100 e 1000)
+GET /metrics?periodo=semana                            # padrão: últimos 7 dias, projeção semanal
+GET /metrics?periodo=mes                               # últimos 30 dias, projeção mensal
+GET /metrics?periodo=mes&usuarios=50&usuarios=5000     # cenários customizados (padrão: 100 e 1000)
 ```
 
 | Demanda | Campo da resposta |
 |---|---|
 | Custo estimado para 100 e 1000 usuários semanais | `cenarios[]` (`usuarios`, `requisicoes`, `custo_usd`, `retorno_usd`, `roi`) |
-| Latência interagentes | `latencia.por_no[]` (média e p95 de cada nó do grafo) |
+| Latência interagentes | `latencia.por_no[]` (média e p95 por nó do grafo) |
 | Tempo total de resposta | `latencia.total_media_ms`, `latencia.total_p95_ms` |
 | Índice de erros | `erros.indice_erros`, `erros.indice_erros_componentes`, `erros.bloqueios` |
 | Custo / retorno (ROI) | `roi.retorno_usd`, `roi.roi` |
-| Custo por resolução | `resolucao.custo_por_resolucao_usd` (+ `resolucao.taxa_resolucao`) |
+| Custo por resolução | `resolucao.custo_por_resolucao_usd`, `resolucao.taxa_resolucao` |
 | Custo observado | `custo.total_usd`, `custo.medio_por_requisicao_usd`, `custo.por_modelo[]` |
 | Latência e custo do JEV | `jev.latencia_media_ms`, `jev.latencia_p95_ms`, `jev.custo_usd`, `jev.reprovacoes` |
-| Premissas usadas | `premissas` (para o front exibir junto dos números) |
+| Premissas usadas | `premissas` |
 
-Fluxo dos dados:
+**Fluxo dos dados**
 
-1. `metrics.py` → `ColetorMetricas` é um callback passado no `config` de cada `invoke` do grafo. Ele
-   anota a latência de cada nó, cada chamada de LLM (modelo, tokens, custo, latência) e os erros de
-   LLM/ferramenta. O texto do prompt **não** é guardado.
-2. `registrar_requisicao` grava um documento por requisição em `dbIAI.metrics` (Mongo), com `user_id` e `kitchen_id`, sem conteúdo da conversa. Falha ao
-   gravar nunca derruba o chat.
+1. `ColetorMetricas` (`metrics.py`) é um callback no `config` de cada `invoke` do grafo. Anota a latência de cada nó,
+   cada chamada de LLM (modelo, tokens, custo, latência) e erros de LLM/tool. O texto do prompt **não** é guardado.
+2. `registrar_requisicao` grava um documento por requisição em `dbIAI.metrics` (Mongo), com `user_id` e `kitchen_id`,
+   sem conteúdo da conversa. Falha ao gravar nunca derruba o chat.
 3. `GET /metrics` agrega esses documentos na janela do `periodo`.
-4. Com `LANGCHAIN_TRACING_V2=true`, cada `/chat` também vira um trace `iai_chat` no LangSmith (tag
-   `iai`, metadata `session_id`/`user_id`), útil para investigar um caso específico.
+4. Com `LANGCHAIN_TRACING_V2=true`, cada `/chat` vira um trace `iai_chat` no LangSmith (tag `iai`, metadata
+   `session_id`/`user_id`).
 
-Definições:
+**Definições**
 
-- **Índice de erros** = requisições que terminaram em exceção ÷ requisições. Bloqueio do guardrail
-  de entrada é o sistema funcionando e **não** conta (aparece em `erros.bloqueios`).
-  `indice_erros_componentes` também conta erros de LLM/ferramenta que o fallback recuperou.
-- **Resolvida** = especialista terminou com execução autorizada de tool, sem parada do gate
-  nem falha de execução (`jev:concluido`). Não comprova fidelidade de toda a redação final.
-  O marcador `juiz:aprovado` continua reconhecido somente para compatibilidade com métricas legadas.
-- **JEV:** cada julgamento fica no documento da requisição (decisão, critérios que falharam,
-  duração, modelo e tokens), sem argumentos ou conteúdo da conversa. O `/metrics` mostra a
-  seção `jev` (chamadas, reprovações, indisponibilidades, latência média e p95, tokens e custo) e
-  soma o custo do JEV ao `custo.total_usd`, ao custo por resolução, ao ROI e às projeções. O preço
-  (`PRECO_JEV_USD_POR_MILHAO`, em `config.py`) é o divulgado pela TypeSafe, US$ 0,042 por milhão de
-  tokens de entrada, saída não cobrada; confira na TypeSafe antes de usar como número oficial. A
-  latência do JEV já está dentro do tempo do nó do especialista e do total da requisição.
-- **Projeção** = usuários × `requisicoes_por_usuario_semana` × semanas do período (1 para semana,
-  52/12 para mês) × custo médio por requisição **observado**. Sem tráfego registrado, vem zerada.
-- **Premissas** (`config.py`): preços por modelo (conferir nas tabelas oficiais),
-  `METRICAS_REQ_USUARIO_SEMANA` (padrão 10) e `METRICAS_VALOR_RESOLUCAO_USD` (padrão 1.50). Todos em
-  USD. Não entram no custo o resumo de sessão (`/chat/encerrar`) nem a infra (Mongo, hospedagem).
-  O custo é estimativa, não a fatura: o LangSmith aplica a tabela dele.
-- **CORS**: origens liberadas em `CORS_ORIGINS` (padrão `http://localhost:3000` e `:5173`); ao
-  publicar, definir no `.env` a URL real do front.
+- **Índice de erros:** requisições que terminaram em exceção ÷ requisições. Bloqueio do guardrail de entrada é o
+  sistema funcionando e não conta (vai em `erros.bloqueios`). `indice_erros_componentes` também conta erros de
+  LLM/tool que o fallback recuperou.
+- **Resolvida:** especialista terminou com execução autorizada de tool, sem parada do gate nem falha de execução
+  (`jev:concluido`). Não comprova a fidelidade de toda a redação final. O marcador legado `juiz:aprovado` continua
+  reconhecido.
+- **JEV:** cada julgamento fica no documento da requisição (decisão, critérios que falharam, duração, modelo e tokens),
+  sem argumentos nem conteúdo da conversa. O custo entra em `custo.total_usd`, no custo por resolução, no ROI e nas
+  projeções, a US$ 0,042 por milhão de tokens de entrada (`PRECO_JEV_USD_POR_MILHAO`, em `config.py`; saída não
+  cobrada). Confira o valor na TypeSafe antes de usá-lo como oficial. A latência do JEV já está contida no tempo do
+  nó do especialista.
+- **Projeção:** usuários × `requisicoes_por_usuario_semana` × semanas do período (1 para semana, 52/12 para mês) ×
+  custo médio **observado** por requisição. Sem tráfego registrado, vem zerada.
+- **Premissas** (`config.py`): preços por modelo (conferir nas tabelas oficiais), `METRICAS_REQ_USUARIO_SEMANA`
+  (10) e `METRICAS_VALOR_RESOLUCAO_USD` (1.50), tudo em USD. Não entram no custo o resumo de sessão
+  (`/chat/encerrar`) nem a infra (Mongo, hospedagem). É estimativa, não a fatura.
+
+## Testes
+
+```powershell
+python -m pip install -r requirements-dev.txt
+python -m pytest --cov=iai --cov-report=term-missing --cov-fail-under=91.42
+python -m ruff check iai
+python -m mypy iai --follow-imports=skip
+```
+
+Os testes comuns usam Mongo, dados e identidades simulados. O grafo também é exercitado com agentes LangChain e um
+modelo roteirizado, o que não mede a qualidade de Gemini/Groq. Cobertura mínima exigida: 91,42%.
+
+Testes opcionais, só com serviços explicitamente disponíveis:
+
+| Variável | O que testa |
+|---|---|
+| `RUN_LLM_TESTS=1` + chaves reais | FAQ pelos provedores (negócio e Mongo continuam mockados) |
+| `RUN_MONGO_TESTS=1` + `MONGO_TEST_CONNECTION` | Persistência e decisão atômica em base temporária `iai_test_<uuid>` (não usa `dbIAI`) |
+| `RUN_SPRING_TESTS=1` + `SPRING_TEST_TOKEN` | Leitura de identidade e catálogo reais, sem escrita |
+| `RUN_JEV_TESTS=1` + `TYPESAFE_API_KEY` | Contrato real das decisões TypeSafe, sem executar tools de negócio |
+
+## Deploy
+
+- **CI** (`.github/workflows/ci.yaml`) roda a cada alteração.
+- **CD** (`.github/workflows/cd.yaml`) roda ao publicar uma tag `v*`: publica a imagem `inventra-ai` no GHCR e
+  atualiza o GitOps para o k3s.
+- A imagem ([`Dockerfile`](Dockerfile)) usa Python 3.12 Alpine e roda como usuário não-root (UID 10001).
+- Em plataformas como o Render, configure `TYPESAFE_API_KEY` e demais variáveis em **Environment**. Nunca publique o
+  `.env` local.
