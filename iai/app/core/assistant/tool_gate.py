@@ -33,11 +33,7 @@ from pydantic import BaseModel, Field, ValidationError
 
 from iai.app.core.assistant import flow_events, judge
 from iai.app.core.business.domain import ROLE_OPERATIONS, Operation
-from iai.app.core.config import (
-    GEMINI_API_KEY,
-    GROQ_API_KEY,
-    TYPESAFE_API_KEY,
-)
+from iai.app.core.config import CHAVES_LLM, TYPESAFE_API_KEY
 from iai.app.core.infra.privacy import remove_secrets
 from iai.app.core.infra.security import context
 
@@ -218,7 +214,7 @@ def sanitized(value):
     """Só dados JSON explícitos; nunca serializar RequestContext/config/system prompt."""
     from iai.app.core.assistant.guardrail import anonimizar_entrada
 
-    secrets = [GEMINI_API_KEY, GROQ_API_KEY, TYPESAFE_API_KEY, context().token]
+    secrets = [*CHAVES_LLM, TYPESAFE_API_KEY, context().token]
     salt = scope_var.get().redaction_salt if scope_var.get() else uuid4().hex
 
     def clean_text(text):
@@ -419,12 +415,7 @@ class JevToolGate(AgentMiddleware):
             raw = json.dumps(call["args"], default=str)
             if raw != remove_secrets(raw) or any(
                 secret.get_secret_value() and secret.get_secret_value() in raw
-                for secret in (
-                    GEMINI_API_KEY,
-                    GROQ_API_KEY,
-                    TYPESAFE_API_KEY,
-                    context().token,
-                )
+                for secret in (*CHAVES_LLM, TYPESAFE_API_KEY, context().token)
             ):
                 hard_error = "SECRET_IN_ARGUMENTS"
             if hard_error:

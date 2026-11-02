@@ -1080,6 +1080,41 @@ def test_gemini_embedding_adapter_preserves_task_and_dimension_contract(monkeypa
     assert observed[1][1]["task_type"] == "RETRIEVAL_QUERY"
 
 
+def test_embedding_passa_para_a_proxima_chave_gemini_quando_uma_estoura(monkeypatch):
+    import langchain_google_genai
+    from google.genai.errors import ClientError
+    from pydantic import SecretStr
+
+    from iai.app.core.assistant.rodizio import registro
+
+    registro.limpar()
+    monkeypatch.setattr(index, "GEMINI_API_KEYS", (SecretStr("k1"), SecretStr("k2")))
+    usadas = []
+
+    class Client:
+        def __init__(self, chave):
+            self.chave = chave
+
+        def embed_documents(self, texts, **kwargs):
+            usadas.append(self.chave)
+            if self.chave == "k1":
+                raise ClientError(
+                    429, {"error": {"code": 429, "message": "limite. Please retry in 20s."}}
+                )
+            return [[1.0] * index.EMBEDDING_DIM for _ in texts]
+
+    monkeypatch.setattr(
+        langchain_google_genai,
+        "GoogleGenerativeAIEmbeddings",
+        lambda **kwargs: Client(kwargs["api_key"].get_secret_value()),
+    )
+    vetores = index.EmbedderGemini().documentos(["prazo"])
+    assert len(vetores[0]) == index.EMBEDDING_DIM
+    assert usadas == ["k1", "k2"]
+    assert 0 < registro.restante("gemini-embedding#1") <= 20
+    registro.limpar()
+
+
 def test_document_routes_and_tool_explain_index_outage(client, monkeypatch):
     def unavailable(*args, **kwargs):
         raise index.IndiceIndisponivel("index unavailable")

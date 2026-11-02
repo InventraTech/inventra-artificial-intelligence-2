@@ -12,7 +12,11 @@ from iai.app.core.config import (
     AUTH_MODE,
     BUSINESS_MODE,
     CORS_ORIGINS,
+    GEMINI_API_KEYS,
+    GROQ_API_KEYS,
     LLM_MODE,
+    OPENAI_API_KEY,
+    OPENROUTER_API_KEY,
     STORAGE_MODE,
 )
 from iai.app.core.infra.storage import get_db, initialize_storage
@@ -110,6 +114,13 @@ def health():
             "business": BUSINESS_MODE,
             "storage": STORAGE_MODE,
             "llm": LLM_MODE,
+        },
+        # Só contagens, para conferir depois de um deploy se as chaves chegaram ao servidor.
+        "llm_chaves": {
+            "groq": len(GROQ_API_KEYS),
+            "gemini": len(GEMINI_API_KEYS),
+            "openrouter": bool(OPENROUTER_API_KEY.get_secret_value()),
+            "openai": bool(OPENAI_API_KEY.get_secret_value()),
         },
         "warning": "Modo demonstrativo não autentica usuários reais nem altera estoque real."
         if "mock" in {AUTH_MODE, BUSINESS_MODE, STORAGE_MODE} or LLM_MODE == "demo"

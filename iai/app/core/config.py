@@ -1,4 +1,5 @@
 import os
+import re
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from urllib.parse import urlsplit
@@ -15,8 +16,37 @@ load_dotenv(BASE_DIR / ".env")
 # Configuração local legada; variáveis do processo e iai/.env têm prioridade.
 load_dotenv(BASE_DIR / "app" / ".env")
 
-GEMINI_API_KEY = SecretStr(os.getenv("GEMINI_API_KEY", ""))
-GROQ_API_KEY = SecretStr(os.getenv("GROQ_API_KEY", ""))
+
+
+def _chaves(base: str) -> tuple[SecretStr, ...]:
+    """BASE, BASE_2, BASE_3... em ordem numérica, sem vazias nem repetidas."""
+    padrao = re.compile(rf"^{re.escape(base)}(?:_(\d+))?$")
+    achadas = sorted(
+        (int(m.group(1) or 1), valor.strip())
+        for nome, valor in os.environ.items()
+        if (m := padrao.match(nome)) and valor.strip()
+    )
+    return tuple(SecretStr(v) for v in dict.fromkeys(valor for _, valor in achadas))
+
+
+# Uma lista por provedor: o rodízio (assistant/rodizio.py) passa para a próxima chave quando uma falha.
+GEMINI_API_KEYS = _chaves("GEMINI_API_KEY")
+GROQ_API_KEYS = _chaves("GROQ_API_KEY")
+GEMINI_API_KEY = GEMINI_API_KEYS[0] if GEMINI_API_KEYS else SecretStr("")
+GROQ_API_KEY = GROQ_API_KEYS[0] if GROQ_API_KEYS else SecretStr("")
+OPENAI_API_KEY = SecretStr(os.getenv("OPEN_AI_KEY") or os.getenv("OPENAI_API_KEY") or "")
+OPENROUTER_API_KEY = SecretStr(
+    os.getenv("OPEN_ROUTER_API_KEY") or os.getenv("OPENROUTER_API_KEY") or ""
+)
+CHAVES_LLM = (*GEMINI_API_KEYS, *GROQ_API_KEYS, OPENAI_API_KEY, OPENROUTER_API_KEY)
+GEMINI_MODEL = os.getenv("GEMINI_MODEL", "gemini-3.5-flash").strip()
+# Luna (OpenAI) é o especialista preferido: OpenRouter primeiro, OpenAI direto de reserva.
+LUNA_MODEL_OPENROUTER = os.getenv("LUNA_MODEL_OPENROUTER", "openai/gpt-6-luna").strip()
+LUNA_MODEL_OPENAI = os.getenv("LUNA_MODEL_OPENAI", "gpt-6-luna").strip()
+LUNA_REASONING_EFFORT = os.getenv("LUNA_REASONING_EFFORT", "low").strip().lower()
+# Segundos até desistir de um provedor (e passar ao próximo): leves respondem rápido, especialistas pensam mais.
+LLM_TIMEOUT = float(os.getenv("LLM_TIMEOUT", "40"))
+LLM_TIMEOUT_LEVE = float(os.getenv("LLM_TIMEOUT_LEVE", "20"))
 TYPESAFE_API_KEY = SecretStr(os.getenv("TYPESAFE_API_KEY", ""))
 JEV_MODEL = os.getenv("JEV_MODEL", "jev-1.13.0")
 JEV_APPROVAL_THRESHOLD = float(os.getenv("JEV_APPROVAL_THRESHOLD", "0.70"))
@@ -67,6 +97,10 @@ if (
 
 PRECOS_MODELOS_USD_POR_MILHAO: dict[str, tuple[float, float]] = {
     "gemini-2.5-flash": (0.30, 2.50),
+    "gemini-3.5-flash": (1.50, 9.00),
+    "gemini-3.6-flash": (1.50, 9.00),
+    "gpt-6-luna": (0.10, 0.50),
+    "gpt-5.6-luna": (0.20, 1.20),
     "openai/gpt-oss-20b": (0.075, 0.30),
     "openai/gpt-oss-safeguard-20b": (0.075, 0.30),
 }

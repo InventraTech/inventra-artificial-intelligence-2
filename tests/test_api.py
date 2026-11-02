@@ -136,6 +136,8 @@ def test_same_session_name_does_not_mix_users_and_restart_rehydrates(client):
 def test_modes_are_observable_and_parameters_validated(client):
     health = client.get("/health")
     assert health.json()["modes"]["auth"] == "mock"
+    chaves = health.json()["llm_chaves"]
+    assert chaves == {"groq": 1, "gemini": 1, "openrouter": False, "openai": False}
     assert health.headers["X-IAI-Business-Mode"] == "mock"
     assert client.get("/approvals?limit=10000", headers=auth()).status_code == 422
     assert (
