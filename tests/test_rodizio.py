@@ -454,14 +454,16 @@ class Entrada(BaseModel):
     codigo: str = Field(pattern=r"^[A-Z]{3}$")
 
 
-def test_decimal_gera_pattern_com_lookaround_e_a_openai_ve_o_schema_limpo():
-    from decimal import Decimal
-
-    class ComDecimal(BaseModel):
-        quantidade: Decimal
+def test_openai_ve_o_schema_das_tools_sem_pattern_com_lookaround():
+    # O Pydantic já gerou isso para Decimal (versões antigas); o pattern é escrito à mão para não depender dela.
+    class ComLookaround(BaseModel):
+        # json_schema_extra: o validador do Pydantic não aceita lookaround, mas o schema enviado à OpenAI traz.
+        quantidade: str = Field(
+            json_schema_extra={"pattern": r"^(?!^[-+.]*$)[+-]?0*\d*\.?\d*$"}
+        )
         codigo: str = Field(pattern=r"^[A-Z]{3}$")
 
-    ferramenta = convert_to_openai_tool(ComDecimal)
+    ferramenta = convert_to_openai_tool(ComLookaround)
     assert "(?!" in str(ferramenta)
 
     modelo = llms.ChatOpenAISemLookaround(model="gpt-6-luna", api_key="sk-teste")
