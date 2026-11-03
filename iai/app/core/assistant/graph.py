@@ -100,7 +100,7 @@ def _prompt_com_data(prompt_base: str):
     return _prompt
 
 
-router_app = create_agent(
+router_app = create_agent(  # type: ignore[call-overload]
     model=llm_rapido,
     tools=TOOLS_MEMORIA,
     middleware=[

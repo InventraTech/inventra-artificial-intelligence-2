@@ -40,8 +40,20 @@ col_metricas = CollectionProxy("metrics")
 PREFIXOS_GUARDRAIL_ENTRADA = ("guardrail_insulto:", "guardrail_escopo:")
 
 
+def preco_do_modelo(modelo: str) -> tuple[float, float]:
+    """Preço do nome exato ou, na falta, do maior prefixo conhecido (`gpt-6-luna-2026-09-22` usa `gpt-6-luna`).
+    Vale também para o nome sem o provedor (`openai/gpt-6-luna-...`)."""
+    for nome in (modelo, modelo.rpartition("/")[2]):
+        if nome in PRECOS_MODELOS_USD_POR_MILHAO:
+            return PRECOS_MODELOS_USD_POR_MILHAO[nome]
+        conhecidos = [k for k in PRECOS_MODELOS_USD_POR_MILHAO if nome.startswith(k + "-")]
+        if conhecidos:
+            return PRECOS_MODELOS_USD_POR_MILHAO[max(conhecidos, key=len)]
+    return (0.0, 0.0)
+
+
 def custo_usd(modelo: str, entrada: int, saida: int) -> float:
-    preco_entrada, preco_saida = PRECOS_MODELOS_USD_POR_MILHAO.get(modelo, (0.0, 0.0))
+    preco_entrada, preco_saida = preco_do_modelo(modelo)
     return (entrada * preco_entrada + saida * preco_saida) / 1_000_000
 
 

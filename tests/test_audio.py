@@ -19,7 +19,7 @@ def cliente_falso(texto):
 
 def test_transcreve_e_remove_espacos(monkeypatch):
     monkeypatch.setattr(
-        audio, "cliente", lambda: cliente_falso("  usei 2 kg de arroz ")
+        audio, "cliente", lambda *_: cliente_falso("  usei 2 kg de arroz ")
     )
     assert audio.transcrever_audio(b"x", "voz.webm") == "usei 2 kg de arroz"
 
@@ -37,7 +37,7 @@ def test_rejeita_entrada_invalida(conteudo, nome, status):
 
 
 def test_transcricao_vazia_vira_422(monkeypatch):
-    monkeypatch.setattr(audio, "cliente", lambda: cliente_falso("   "))
+    monkeypatch.setattr(audio, "cliente", lambda *_: cliente_falso("   "))
     with pytest.raises(HTTPException) as erro:
         audio.transcrever_audio(b"x", "voz.wav")
     assert erro.value.status_code == 422
@@ -92,3 +92,35 @@ def test_rota_exige_token_e_user_id_igual_ao_do_token():
         cliente, {"Authorization": "Bearer demo-estoquista"}, user_id="demo-comprador"
     )
     assert outro.status_code == 403
+
+
+def test_audio_passa_para_a_proxima_chave_quando_a_groq_limita_uma(monkeypatch):
+    import groq
+    import httpx
+    from pydantic import SecretStr
+
+    from iai.app.core.assistant.rodizio import registro
+
+    registro.limpar()
+    monkeypatch.setattr(audio, "GROQ_API_KEYS", (SecretStr("k1"), SecretStr("k2")))
+    usadas = []
+
+    def cliente_da_chave(indice):
+        def create(**kwargs):
+            usadas.append(indice)
+            if indice == 0:
+                resposta = httpx.Response(
+                    429, request=httpx.Request("POST", "https://api.groq.com")
+                )
+                raise groq.RateLimitError("limite", response=resposta, body=None)
+            return SimpleNamespace(text="usei 2 kg de arroz")
+
+        return SimpleNamespace(
+            audio=SimpleNamespace(transcriptions=SimpleNamespace(create=create))
+        )
+
+    monkeypatch.setattr(audio, "cliente", cliente_da_chave)
+    assert audio.transcrever_audio(b"x", "voz.webm") == "usei 2 kg de arroz"
+    assert usadas == [0, 1]
+    assert registro.restante("groq/whisper#1") > 0
+    registro.limpar()

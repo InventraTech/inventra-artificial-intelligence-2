@@ -1,8 +1,9 @@
 langchain==1.4.0
-langchain-core==1.6.2
+langchain-core==1.6.10
 langchain-community==0.4.1
 langchain-google-genai==4.2.1
 langchain-groq==1.1.2
+langchain-openai==1.7.2
 groq>=0.37,<1.0
 mcp>=2.2,<3.0
 langgraph==1.2.11

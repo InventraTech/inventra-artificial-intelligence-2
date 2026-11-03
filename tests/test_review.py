@@ -157,6 +157,22 @@ def test_jev_recebe_a_proposta_ja_criada_sem_segredos(monkeypatch):
     assert ctx.token.get_secret_value() not in str(estado)
 
 
+def test_mensagens_anteriores_vao_ao_jev_rotuladas_como_ja_respondidas(monkeypatch):
+    """Uma pergunta de leitura antes da escrita não pode virar parte do pedido que o juiz avalia."""
+    estados = roteiro_jev(monkeypatch, aprovada())
+    anteriores = [
+        HumanMessage(content="Quanto tem de arroz em estoque?"),
+        AIMessage(content="50 kg."),
+        *entrada(),
+    ]
+    revisa(AgenteFalso(), resposta_de([*anteriores, *propoe()]), ent=anteriores)
+    (estado,) = estados
+    assert estado["user_request"] == PEDIDO
+    assert estado["conversation"] == [
+        review.MENSAGEM_ANTERIOR + "Quanto tem de arroz em estoque?"
+    ]
+
+
 def test_escrita_reprovada_cancela_e_o_especialista_repete_uma_vez(monkeypatch):
     estados = roteiro_jev(monkeypatch, reparo(), aprovada())
     agente = AgenteFalso(escreve(final="Proposta refeita."))

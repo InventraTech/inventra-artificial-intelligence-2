@@ -22,10 +22,12 @@ from typing import Any, Protocol
 from qdrant_client import QdrantClient, models
 
 from iai.app.core.assistant.guardrail import normalizar_texto
+from iai.app.core.assistant.rodizio import tentar_em_rodizio
 from iai.app.core.config import (
     EMBEDDING_DIM,
     EMBEDDING_MODEL,
     GEMINI_API_KEY,
+    GEMINI_API_KEYS,
     LLM_MODE,
     QDRANT_API_KEY,
     QDRANT_COLLECTION,
@@ -123,20 +125,35 @@ class EmbedderGemini:
     def __init__(self) -> None:
         from langchain_google_genai import GoogleGenerativeAIEmbeddings
 
-        self._cliente = GoogleGenerativeAIEmbeddings(
-            model=EMBEDDING_MODEL,
-            api_key=GEMINI_API_KEY,
-            output_dimensionality=EMBEDDING_DIM,
-        )
+        # Um cliente por chave Gemini: se uma estourar o limite, a próxima gera o mesmo embedding.
+        self._clientes = [
+            (
+                f"gemini-embedding#{n}",
+                GoogleGenerativeAIEmbeddings(
+                    model=EMBEDDING_MODEL,
+                    api_key=chave,
+                    output_dimensionality=EMBEDDING_DIM,
+                ),
+            )
+            for n, chave in enumerate(GEMINI_API_KEYS or (GEMINI_API_KEY,), 1)
+        ]
 
     def documentos(self, textos: list[str]) -> list[list[float]]:
-        return self._cliente.embed_documents(
-            textos, task_type="RETRIEVAL_DOCUMENT", output_dimensionality=EMBEDDING_DIM
+        return tentar_em_rodizio(
+            self._clientes,
+            lambda cliente: cliente.embed_documents(
+                textos,
+                task_type="RETRIEVAL_DOCUMENT",
+                output_dimensionality=EMBEDDING_DIM,
+            ),
         )
 
     def consulta(self, texto: str) -> list[float]:
-        return self._cliente.embed_query(
-            texto, task_type="RETRIEVAL_QUERY", output_dimensionality=EMBEDDING_DIM
+        return tentar_em_rodizio(
+            self._clientes,
+            lambda cliente: cliente.embed_query(
+                texto, task_type="RETRIEVAL_QUERY", output_dimensionality=EMBEDDING_DIM
+            ),
         )
 
 
